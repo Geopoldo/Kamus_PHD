@@ -1,0 +1,6 @@
+{
+  "model_offload": "gpu_only",
+  "allow_cpu_model_layers": false,
+  "minimum_vram_reserve_mib": 1536,
+  "note": "User requires all model layers on GPU. CPU remains available for PDF preparation, HTTP coordination and deterministic audits. Refuse models whose weights, projector and reserve exceed free VRAM."
+}

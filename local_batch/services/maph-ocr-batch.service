@@ -1,0 +1,26 @@
+[Unit]
+Description=MAP-H local confidential PDF transcription
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+WorkingDirectory=/home/ewok/Documents/ChatGPT/MAP-H-NOV14-CADDOCS
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/ewok/Documents/ChatGPT/MAP-H-NOV14-CADDOCS/local_batch/run.py
+ExecStopPost=/usr/bin/python3 /home/ewok/Documents/ChatGPT/MAP-H-NOV14-CADDOCS/local_batch/ops.py
+Restart=on-failure
+RestartSec=30
+WatchdogSec=45
+TimeoutStartSec=360
+TimeoutStopSec=20
+KillMode=control-group
+OOMPolicy=stop
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=maph-ocr
+
+[Install]
+WantedBy=default.target

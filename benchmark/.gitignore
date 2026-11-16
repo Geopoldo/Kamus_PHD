@@ -1,0 +1,4 @@
+models/
+hf-cache/
+hf-modules/
+__pycache__/

@@ -1,0 +1,19 @@
+Transcribe the visible foreground text in this historical document image. Work from the image alone.
+
+Preserve the original language, spelling, capitalization, abbreviations, numbers, punctuation, and physical line breaks. Do not translate, summarize, modernize spelling, expand abbreviations, correct grammar, or complete text beyond the image. Do not replace a name or place with a more familiar one.
+
+Identify separate text regions such as the header, body, margin notes, footer, and page or archive numbers. Transcribe each region once. Keep each region's lines together in their visual reading order. Keep a marginal note in its own region rather than silently inserting it into a body sentence. For multiple columns, finish one column before moving to the next. Preserve list labels and words split across physical lines as they appear.
+
+Include crossed-out text where readable, but enclose it in [DEL] and [/DEL]. Mark visibly inserted text with [INS] and [/INS]. Put inline insertions at their visible position in the line. Do not silently merge corrections into a rewritten sentence. A region consisting entirely of crossed-out text must still use [DEL] tags around its text.
+
+[DEL] and [INS] may span several physical lines within one region, but must close before [END_REGION]. Do not nest [DEL] and [INS] inside each other.
+
+For a tentative reading, enclose only the uncertain span in [UNCLEAR] and [/UNCLEAR]. If no reliable reading is possible, use [ILLEGIBLE]. These markers may occur inside [DEL] or [INS]. Do not guess missing words to make a sentence sound natural. Do not mark an entire line unreadable when part of it is readable. Ignore reverse-side bleed-through only when it is clearly distinguishable from foreground writing.
+
+Return only the transcription in this format:
+Start each region with a line of the form [REGION R1 body], replacing R1 with a unique sequential ID and body with one of: header, body, margin, footer, folio, other.
+Write the transcribed physical lines below it.
+End each region with [END_REGION] on its own line.
+Repeat for all visible text regions. Use folio for page numbers and archive identifiers. Use other for a text region that does not fit the listed types.
+
+Do not include Markdown code fences, explanations, confidence percentages, or the formatting instructions themselves. Before returning the result, check that no visible region was skipped or transcribed twice.

@@ -1,0 +1,1 @@
+Transcribe all visible text in this historical document image, in reading order. Preserve the original English spelling, names, dates, and paragraph structure. Do not summarize, translate, modernize, or complete text outside the image. Mark genuinely unreadable words as [illegible]. Return only the transcription.
