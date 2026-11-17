@@ -95,7 +95,20 @@ function uPaintText(keep){
 }
 function uChangedText(next){const p=u.page;if(p.text===next)return;const oldCount=p.annotations.length;uBy('ue-fragment').hidden=true;uHistory();p.annotations=shiftReviewMarks(p.annotations,p.text,next);p.text=next;if(p.annotations.length<oldCount)u.message=ut('removedMark');else u.message='';uMarkDirty();uDrawDoubts();clearTimeout(u.changeTimer);u.changeTimer=setTimeout(()=>{uPaintText(true);uDrawOriginal()},250)}
 function uInsert(text){if(u.busy||!u.reviewer)return;const s=uSelection();if(!s)return;const p=u.page,next=p.text.slice(0,s.start)+text+p.text.slice(s.end);uChangedText(next);uPaintText();uSetSelection(s.start+text.length)}
-function uSelected(){u.selection=uSelection();const bar=uBy('ue-selection');if(!bar)return;bar.hidden=!u.selection||u.selection.start===u.selection.end||!u.reviewer}
+function uSelected(){
+ u.selection=uSelection();const bar=uBy('ue-selection'),editor=uBy('ue-text');if(!bar||!editor)return;
+ bar.hidden=!u.selection||u.selection.start===u.selection.end||!u.reviewer;
+ if(bar.hidden)return;
+ const selection=getSelection();if(!selection?.rangeCount)return;
+ const rects=[...selection.getRangeAt(0).getClientRects()],viewport=editor.getBoundingClientRect();
+ const anchor=rects.find(r=>r.bottom>viewport.top&&r.top<viewport.bottom&&r.right>viewport.left&&r.left<viewport.right);
+ if(!anchor){bar.hidden=true;return}
+ const host=bar.parentElement.getBoundingClientRect(),width=bar.offsetWidth,height=bar.offsetHeight,gap=8;
+ const left=Math.max(viewport.left+gap,Math.min(anchor.left,viewport.right-width-gap));
+ const above=anchor.top-height-gap;
+ const top=Math.max(viewport.top+gap,Math.min(above>=viewport.top?above:anchor.bottom+gap,viewport.bottom-height-gap));
+ Object.assign(bar.style,{left:(left-host.left)+'px',top:(top-host.top)+'px',bottom:'auto',transform:'none',maxWidth:Math.max(0,viewport.width-2*gap)+'px',boxSizing:'border-box',flexWrap:'wrap'});
+}
 function uAddMark(){const s=u.selection,p=u.page;if(!s||s.start===s.end)return;const existing=p.annotations.findIndex(m=>m.start<s.end&&m.end>s.start);if(existing>=0){uOpenNote(existing);return}uHistory();p.annotations.push({...s,quote:p.text.slice(s.start,s.end),note:''});uMarkDirty();uPaintText(true);uDrawDoubts();uOpenNote(p.annotations.length-1);uBy('ue-selection').hidden=true}
 function uDrawDoubts(){const list=uBy('ue-doubt-list');if(!list)return;list.replaceChildren();u.page.annotations.forEach((m,i)=>{const row=document.createElement('button');row.type='button';row.textContent=(i+1)+'. '+m.quote;row.onclick=()=>uOpenNote(i);list.append(row)});uUpdateStatus()}
 function uOpenNote(i){const m=u.page.annotations[i];if(!m)return;const panel=uBy('ue-fragment');panel.hidden=false;panel.dataset.index=i;uBy('ue-quote').textContent=m.quote;uBy('ue-fragment-note').value=m.note||'';uBy('ue-fragment-note').focus();uBy('ue-doubt-list').hidden=true}
@@ -128,7 +141,7 @@ function uBuild(){
  const editor=uBy('ue-text');editor.oninput=()=>{if(!u.composing)uChangedText(editor.textContent)};editor.oncompositionstart=()=>u.composing=true;editor.oncompositionend=()=>{u.composing=false;uChangedText(editor.textContent)};
  editor.onpaste=e=>{e.preventDefault();uInsert(e.clipboardData.getData('text/plain'))};editor.ondrop=e=>e.preventDefault();
  editor.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();uInsert('\n')}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();uUndo(e.shiftKey)}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();uSave()}};
- editor.onpointerup=uSelected;editor.onkeyup=uSelected;editor.onclick=e=>{const m=e.target.closest('[data-mark]');if(m&&(!uSelection()||uSelection().start===uSelection().end))uOpenNote(Number(m.dataset.mark))};
+ editor.onpointerup=uSelected;editor.onkeyup=uSelected;editor.onscroll=()=>{uBy('ue-selection').hidden=true};editor.onclick=e=>{const m=e.target.closest('[data-mark]');if(m&&(!uSelection()||uSelection().start===uSelection().end))uOpenNote(Number(m.dataset.mark))};
  for(const id of ['ue-mark','ue-add-note']){uBy(id).onpointerdown=e=>e.preventDefault();uBy(id).onclick=uAddMark}
  uBy('ue-changes').checked=u.showChanges;uBy('ue-changes').onchange=e=>{u.showChanges=e.target.checked;uPaintText(true)};
  uBy('ue-doubts').onclick=()=>{uBy('ue-doubt-list').hidden=!uBy('ue-doubt-list').hidden};

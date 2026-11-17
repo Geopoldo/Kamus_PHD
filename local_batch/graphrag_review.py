@@ -67,8 +67,21 @@ def status(root):
     prepared = read(directory / 'inputs.json')
     from graphrag_eta import estimate
     eta = estimate(manifest, [read(p) for p in (directory/'runs').glob('*/manifest.json') if p.parent != run])
+    blocks = read(directory / 'blocks.json')
+    if blocks.get('status') == 'running':
+        remaining = eta.get('remaining_seconds')
+        target = blocks.get('target_pages', 0)
+        total_pages = blocks.get('total_pages', target)
+        # Cumulative releases rebuild communities; account for every later release.
+        history = [read(p) for p in (directory/'runs').glob('*/manifest.json')]
+        rates = [r['elapsed_seconds']/r['total'] for r in history if r.get('status')=='complete' and r.get('total') and r.get('elapsed_seconds')]
+        rate = rates[-1] if rates else None
+        future_targets = list(range(target+80, total_pages, 80)) + ([total_pages] if total_pages>target else [])
+        blocks['block_remaining_seconds'] = remaining
+        blocks['final_remaining_seconds'] = remaining + sum(future_targets)*rate if remaining is not None and rate else None
+        blocks['estimate_basis'] = 'Indicative cumulative rebuild estimate from completed runs; cache reuse and future GPU waits can change it.'
     return dict(status=manifest.get('status'), manifest=manifest, plan=plan, server_time=time.time(),
-                eta=eta,
+                eta=eta, blocks=blocks,
                 resources={k:sample.get(k) for k in fields}, result_ready=ready,
                 available_run=active_key if ready else None, available_pages=active.get('total', 0) if ready else 0,
                 source_changes=source_availability(root, active_key),
