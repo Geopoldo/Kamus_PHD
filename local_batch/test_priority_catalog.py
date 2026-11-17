@@ -34,15 +34,15 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(log['changes'][0]['fields']['priority'],dict(before='Alta',after='Media'))
         with self.assertRaises(FileExistsError):catalog.save(self.root,dict(revision=0,changes=[e]))
 
-    def test_new_person_uses_configured_name_and_lower_score_for_distant_words(self):
+    def test_new_person_uses_complete_configured_name_and_rejects_distant_words(self):
         e=dict(id='user:11111111-1111-4111-8111-111111111111',kind='person',label='Jane Example',first_name='Jane',last_name='Example',aliases=['Janet Example'],priority='Alta',enabled=True)
         catalog.save(self.root,dict(revision=0,changes=[e]))
         matcher=search.Matcher(catalog.catalog_for(self.root))
         direct=[m for m in matcher.match('Jane Example') if m['entity']==e['id']]
         distant=[m for m in matcher.match('Jane spoke at length to another Example') if m['entity']==e['id']]
         self.assertEqual(direct[0]['score'],100)
-        self.assertEqual(distant[0]['score'],20)
-        self.assertEqual(distant[0]['quality'],'cooccurrence')
+        self.assertEqual(distant,[])
+        self.assertTrue([m for m in matcher.match('Janet Example') if m['entity']==e['id']])
         self.assertFalse([m for m in matcher.match('Example') if m['entity']==e['id']])
 
     def test_disable_is_reversible_and_does_not_remove_source_rows(self):

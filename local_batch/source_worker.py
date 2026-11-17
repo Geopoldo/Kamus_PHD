@@ -42,12 +42,15 @@ def execute(root, key, runner=None, recalculate=None):
                     try:child.wait(timeout=20)
                     except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);child.wait()
         try:
+            run([sys.executable,str(sources.HERE/'inventory_audit.py'),'--root',str(root),'--reason','source_pipeline'])
             if not job['refresh_only']:
                 save('transcription');run([sys.executable,str(sources.HERE/'run.py')])
             save('rules_audit')
             run([sys.executable,str(sources.HERE/'audit'/'run.py'),'--root',str(root),'--run-id','sources_'+key])
             save('model_audit')
             run([sys.executable,str(sources.HERE/'audit'/'model_run.py'),'--run-id','sources_'+key,'--incremental','--scope',str(directory/'scope.json')])
+            save('embeddings')
+            run([sys.executable,str(sources.HERE/'embedding_worker.py'),'--root',str(root)])
             save('cross_analysis')
             if recalculate is not None:recalculate()
             else:
@@ -74,7 +77,7 @@ def execute(root, key, runner=None, recalculate=None):
                 if incomplete:failed.append(doc['source'])
             sources.write(root/'sources'/'catalog.json',catalog)
             save('complete',status='partial' if failed else 'complete',finished=time.time(),failed_documents=failed,
-                 message='Proceso automático terminado. La revisión humana sigue pendiente.' if not failed else 'Algunas páginas fallaron. Sus resultados anteriores se conservan; puedes continuar las fuentes pendientes.')
+                 message='Proceso automático terminado. Puedes buscar y analizar; revisa las páginas cuando encuentres indicios de interés.' if not failed else 'Algunas páginas fallaron. Sus resultados anteriores se conservan; puedes continuar las fuentes pendientes.')
         except BaseException as error:
             catalog=sources.metadata(root)
             for name in job['documents']:catalog['items'].setdefault(sources.ident(name),{})['pipeline_status']='failed'

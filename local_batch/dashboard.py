@@ -3,7 +3,14 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 import html,json,threading,time,re,io,zipfile,os,ipaddress,hashlib
 from urllib.parse import urlsplit,parse_qs,unquote
-import review,issues,triage,content_search,reading_matrix,priority_search,priority_catalog,priority_audit,sources,selections
+import research_sessions
+import research_workspace
+import hypotheses
+import hypotheses_auto
+import place_geography
+import graphrag_review
+import graphrag_queries
+import review,issues,triage,content_search,reading_matrix,priority_search,priority_catalog,priority_audit,sources,selections,embeddings,process_telemetry
 from metrics import export
 from ops import status as operational_status
 ROOT=Path(__file__).resolve().parent/'results'
@@ -36,12 +43,22 @@ class Handler(BaseHTTPRequestHandler):
    except OSError:self.reply({'error':'No se pudo guardar la fuente. Consulta el registro local.'},500)
    return
   if self.headers.get('Content-Type')!='application/json':self.reply({'error':'Forbidden'},403);return
-  if self.path not in ('/review','/issues','/triage','/matrix','/priorities-run','/priorities-catalog','/sources/start','/sources/archive','/sources/restore','/selections'):self.send_error(404);return
+  if self.path not in ('/review','/issues','/triage','/matrix','/matrix/retry','/priorities-run','/priorities-catalog','/sources/start','/sources/archive','/sources/restore','/selections','/embeddings/start','/place-geography','/knowledge-graph/questions','/hypotheses','/hypotheses/auto','/research-sessions'):self.send_error(404);return
   try:
    length=int(self.headers.get('Content-Length','0'))
-   if not 0<length<=(5*1024*1024 if self.path=='/selections' else 1000000):raise ValueError('Invalid length')
+   if not 0<length<=(5*1024*1024 if self.path in ('/selections','/research-sessions') else 1000000):raise ValueError('Invalid length')
    payload=json.loads(self.rfile.read(length))
    if not isinstance(payload,dict):raise ValueError('Se requiere un objeto JSON')
+   if self.path=='/research-sessions':self.reply(research_sessions.save(ROOT,payload));return
+   if self.path=='/hypotheses/auto':self.reply(hypotheses_auto.create(ROOT,payload));return
+   if self.path=='/hypotheses':
+    session_id=research_sessions.validate_link(ROOT,payload.get('session_id'));base=ROOT/'research_sessions'/session_id if session_id else ROOT
+    if payload.get('query_id'):self.reply(research_workspace.save_diagram(ROOT,payload));return
+    self.reply(hypotheses.save(base,payload));return
+   if self.path=='/knowledge-graph/questions':self.reply(graphrag_queries.create(ROOT,payload));return
+   if self.path=='/matrix/retry':self.reply(reading_matrix.retry(ROOT,payload));return
+   if self.path=='/place-geography':self.reply(place_geography.save(ROOT,payload));return
+   if self.path=='/embeddings/start':self.reply(embeddings.start(ROOT));return
    if self.path=='/selections':self.reply(selections.create(ROOT,payload));return
    if self.path.startswith('/sources/'):
     callback='http://127.0.0.1:'+str(self.server.server_port)
@@ -58,6 +75,64 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if not self.allowed():self.reply({'error':'Forbidden'},403);return
   route=urlsplit(self.path);q=parse_qs(route.query)
+  if route.path in ('/research-sessions','/research-sessions/export','/research-sessions/jobs'):
+   try:
+    key=q.get('id',[''])[0]
+    if route.path.endswith('/export'):self.reply(research_sessions.sqlite_bytes(ROOT,key),kind='application/vnd.sqlite3')
+    elif route.path.endswith('/jobs'):research_sessions.get(ROOT,key);self.reply(research_sessions.jobs(ROOT,key))
+    else:self.reply(research_sessions.get(ROOT,key) if key else research_sessions.listing(ROOT))
+   except FileExistsError as e:self.reply({'error':str(e)},409)
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path=='/research-workspace/fishbone':
+   try:self.reply(research_workspace.diagram_state(ROOT,q.get('id',[''])[0],q.get('kind',['knowledge_graph'])[0],q.get('session_id',[None])[0]))
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path=='/research-workspace/evidence':
+   try:self.reply(research_workspace.manifest(ROOT,q.get('id',[''])[0],q.get('kind',['knowledge_graph'])[0],q.get('session_id',[None])[0]))
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path=='/hypotheses/auto':
+   try:self.reply(hypotheses_auto.get(ROOT,q.get('id',[''])[0]))
+   except (ValueError,OSError):self.reply({'error':'Job unavailable'},400)
+   return
+  if route.path=='/hypotheses':
+   try:
+    session_id=research_sessions.validate_link(ROOT,q.get('session_id',[None])[0]);base=ROOT/'research_sessions'/session_id if session_id else ROOT
+    if q.get('query_id'):base=research_workspace.artifact_root(ROOT,q['query_id'][0],q.get('query_kind',['knowledge_graph'])[0],session_id)
+    self.reply(hypotheses.load(base))
+   except ValueError as e:self.reply({'error':str(e)},400)
+   return
+  if route.path in ('/knowledge-graph/questions','/knowledge-graph/questions/csv'):
+   try:
+    if route.path.endswith('/csv'):self.reply(graphrag_queries.csv_bytes(ROOT,q.get('id',[''])[0]),kind='text/csv; charset=utf-8')
+    else:self.reply(graphrag_queries.get(ROOT,q['id'][0]) if 'id' in q else graphrag_queries.listing(ROOT))
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path in ('/knowledge-graph','/knowledge-graph/status','/knowledge-graph/page','/knowledge-graph/csv'):
+   try:
+    if route.path=='/knowledge-graph':self.reply(graphrag_review.get(ROOT))
+    elif route.path=='/knowledge-graph/status':self.reply(graphrag_review.status(ROOT))
+    elif route.path=='/knowledge-graph/page':self.reply(graphrag_review.page(ROOT,q.get('document',[''])[0],int(q.get('page',['0'])[0]),q.get('version',[''])[0],q.get('run',[None])[0]))
+    else:self.reply(graphrag_review.csv_bytes(ROOT),kind='text/csv; charset=utf-8')
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path in ('/process-telemetry','/process-telemetry/record','/process-telemetry/bundle','/process-telemetry/csv','/process-telemetry/pages'):
+   try:
+    if route.path=='/process-telemetry':self.reply(process_telemetry.listing(ROOT))
+    elif route.path=='/process-telemetry/pages':self.reply(process_telemetry.page_coverage(ROOT))
+    elif route.path=='/process-telemetry/csv':self.reply(process_telemetry.csv_bytes(ROOT),kind='text/csv; charset=utf-8')
+    elif route.path=='/process-telemetry/record':self.reply(process_telemetry.detail(ROOT,q.get('stage',[''])[0],q.get('run',[''])[0]))
+    else:self.reply(process_telemetry.bundle(ROOT,q.get('stage',[''])[0],q.get('run',[''])[0]),kind='application/zip')
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path in ('/embeddings/status','/embeddings/history','/embeddings/bundle'):
+   try:
+    if route.path=='/embeddings/status':self.reply(embeddings.status(ROOT))
+    elif route.path=='/embeddings/history':self.reply(embeddings.history(ROOT))
+    else:self.reply(embeddings.bundle(ROOT,q.get('run',[''])[0]),kind='application/zip')
+   except (ValueError,OSError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
   if route.path=='/selections':
    try:self.reply(selections.get(ROOT,q['id'][0]) if 'id' in q else selections.listing(ROOT))
    except ValueError as e:self.reply({'error':str(e)},400)
@@ -84,6 +159,12 @@ class Handler(BaseHTTPRequestHandler):
    job=sources.job_status(ROOT);key=job.get('id','')
    if not re.fullmatch('[a-f0-9]{32}',key):self.reply(b'Sin procesos de fuentes.',kind='text/plain; charset=utf-8');return
    path=ROOT/'sources'/'jobs'/key/'process.log';self.reply(path.read_bytes() if path.exists() else b'',kind='text/plain; charset=utf-8');return
+  if route.path=='/place-geography':
+   try:self.reply(place_geography.get(ROOT))
+   except (OSError,ValueError,KeyError) as e:self.reply({'error':str(e)},400)
+   return
+  if route.path=='/geography-base.json':
+   self.reply((Path(__file__).resolve().parent/'geography-base.json').read_bytes(),kind='application/geo+json');return
   if route.path=='/priorities-history':
    if q.get('download')==['1']:
     path=priority_audit.path(ROOT);self.reply(path.read_bytes() if path.exists() else b'',kind='application/x-ndjson')
@@ -97,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
    try:self.reply(priority_search.get(ROOT))
    except (OSError,ValueError,KeyError) as e:self.reply({'error':str(e)},400)
    return
-  if route.path in ('/priority-search.js','/priority-balance-core.js','/priority-balance.js','/priority-catalog-editor.js','/sources-ui.js','/research-selection.js'):
+  if route.path in ('/priority-search.js','/priority-balance-core.js','/priority-balance.js','/priority-catalog-editor.js','/sources-ui.js','/research-selection.js','/embeddings-ui.js','/process-telemetry-ui.js','/process-methods.js','/graphrag-i18n.js','/interface-catalog.js','/interface-i18n.js','/graphrag-pilot-ui.js','/graphrag-explorer.js','/graphrag-query-progress.js','/graphrag-result-core.js','/graphrag-result-ui.js','/graphrag-entities.js','/source-review.js','/research-sessions.js','/knowledge-workspace.js','/knowledge-source-filters.js','/app-header.js','/place-map.js','/place-map-core.js','/place-map-navigation.js'):
    self.reply((Path(__file__).resolve().parent/route.path.lstrip('/')).read_bytes(),kind='application/javascript');return
   if route.path=='/matrix':
    try:self.reply(reading_matrix.get(ROOT,q['id'][0]) if 'id' in q else reading_matrix.listing(ROOT))
@@ -249,4 +330,6 @@ def refresh():
   time.sleep(5)
 if __name__=='__main__':
  threading.Thread(target=refresh,daemon=True).start()
+ threading.Thread(target=embeddings.watch,args=(ROOT,),daemon=True).start()
+ threading.Thread(target=research_workspace.watch_followups,args=(ROOT,),daemon=True).start()
  ThreadingHTTPServer((BIND,8091),Handler).serve_forever()

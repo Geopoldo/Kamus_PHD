@@ -7,14 +7,63 @@ var PriorityBalance = (() => {
   const pageKey = p => JSON.stringify([p.document_id,p.page]);
   // Empty selections leave a dimension unrestricted; options within it are OR.
   const filterChoice=(selection,value)=>!selection?.length||selection.includes(value);
+  const folderMatches=(source,selected)=>!selected?.length||selected.some(folder=>source.folder===folder||source.folder?.startsWith(folder+'/')||source.document?.startsWith(folder+'/'));
+  function sourceFacets(sources,selectedFolders=[]){
+    const folders=new Set();
+    for(const source of sources){
+      if(source.folder)folders.add(source.folder);
+      const parts=(source.document||'').split('/').slice(0,-1);
+      for(let i=1;i<=parts.length;i++)folders.add(parts.slice(0,i).join('/'));
+    }
+    return {folders:[...folders].sort(),documents:[...new Set(sources.filter(s=>folderMatches(s,selectedFolders)).map(s=>s.document).filter(Boolean))].sort()};
+  }
   function filterEntities(entities,f={}){
     return entities.filter(e=>e.enabled!==false&&filterChoice(f.kind,e.kind)&&filterChoice(f.priority,e.priority)&&filterChoice(f.refs,e.id)&&(!f.sheet?.length||(e.sources||[]).some(s=>f.sheet.includes(s.sheet))||(f.sheet.includes('user')&&!(e.sources||[]).length)));
   }
   function filterSource(source,f={}){
-    return filterChoice(f.folder,source.folder)&&filterChoice(f.document,source.document)&&filterChoice(f.version,source.version?.startsWith('second_reading:')?'secondary':source.version);
+    return folderMatches(source,f.folder)&&filterChoice(f.document,source.document)&&filterChoice(f.version,source.version?.startsWith('second_reading:')?'secondary':source.version);
   }
   function filterEvidence(pages,f={},valid=null){
-    return pages.filter(p=>filterChoice(f.folder,p.folder)&&filterChoice(f.document,p.document)).map(p=>({...p,versions:p.versions.filter(v=>filterSource({...p,version:v.version},f)).map(v=>({...v,matches:v.matches.filter(m=>(!valid||valid.has(m.entity))&&filterChoice(f.quality,m.quality))})).filter(v=>v.matches.length)})).filter(p=>p.versions.length);
+    return pages.filter(p=>folderMatches(p,f.folder)&&filterChoice(f.document,p.document)).map(p=>({...p,versions:p.versions.filter(v=>filterSource({...p,version:v.version},f)).map(v=>({...v,matches:v.matches.filter(m=>(!valid||valid.has(m.entity))&&filterChoice(f.quality,m.quality))})).filter(v=>v.matches.length)})).filter(p=>p.versions.length);
+  }
+  // Separate reference pickers are AND dimensions; alternatives in each picker
+  // remain OR. All required reference types must occur in the SAME reading.
+  function filterScope(catalog,pages,f={},options={}){
+    const byId=new Map(catalog.map(e=>[e.id,e])),required=new Map();
+    for(const id of f.refs||[]){const kind=byId.get(id)?.kind;if(!kind)continue;if(!required.has(kind))required.set(kind,new Set());required.get(kind).add(id)}
+    let entities=filterEntities(catalog,{...f,refs:[]}).filter(e=>!f.refs?.length||f.refs.includes(e.id)||e.kind===options.relaxRefsKind);
+    let evidence=filterEvidence(pages,f,new Set(entities.map(e=>e.id)));
+    if(required.size)evidence=evidence.map(p=>({...p,versions:p.versions.filter(v=>[...required.values()].every(ids=>v.matches.some(m=>ids.has(m.entity))))})).filter(p=>p.versions.length);
+    const found=new Set(evidence.flatMap(p=>p.versions.flatMap(v=>v.matches.map(m=>m.entity))));
+    if(f.presence){entities=entities.filter(e=>f.presence==='yes'?found.has(e.id):!found.has(e.id));const valid=new Set(entities.map(e=>e.id));evidence=filterEvidence(evidence,{},valid)}
+    if(options.categories?.length){const combinations=pageCombinations(entities,evidence);evidence=materialize(combineRecords(options.categories.map(key=>key==='distant'?combinations.distant:combinations.combinations.get(key))))}
+    if(options.focus)evidence=evidence.map(p=>({...p,versions:p.versions.filter(v=>v.matches.some(m=>m.entity===options.focus))})).filter(p=>p.versions.length);
+    return {entities,pages:evidence};
+  }
+  // Disjunctive facets ignore their own selection so users can add alternatives.
+  // Other dimensions, category combinations and the focused referent still apply.
+  function facetValues(catalog,pages,f={},options={}){
+    const byId=new Map(catalog.map(e=>[e.id,e])),facets={},kinds=['person','surname','place'];
+    for(const facet of [...kinds.map(kind=>'refs:'+kind),'kind','priority','sheet','quality','version','folder','document','presence']){
+      const [key,kind]=facet.split(':'),relaxed={...f,[key]:key==='presence'?'':[]};
+      if(key==='refs')relaxed.refs=(f.refs||[]).filter(id=>byId.get(id)?.kind!==kind);
+      const scope=filterScope(catalog,pages,relaxed,{...options,relaxRefsKind:kind}),values=new Set();
+      const found=new Set(scope.pages.flatMap(p=>p.versions.flatMap(v=>v.matches.map(m=>m.entity))));
+      const limited=['quality','version','folder','document'].some(k=>relaxed[k]?.length)||options.categories?.length||options.focus||relaxed.refs?.length;
+      const candidates=scope.entities.filter(e=>relaxed.presence==='no'||!limited||found.has(e.id));
+      if(key==='refs')candidates.filter(e=>e.kind===kind).forEach(e=>values.add(e.id));
+      if(key==='kind'||key==='priority')candidates.forEach(e=>values.add(e[key]));
+      if(key==='sheet')candidates.forEach(e=>(e.sources?.length?e.sources.map(s=>s.sheet):['user']).forEach(value=>values.add(value)));
+      if(key==='quality'||key==='version')for(const p of scope.pages)for(const v of p.versions){if(key==='version')values.add(v.version.startsWith('second_reading:')?'secondary':v.version);else v.matches.forEach(m=>values.add(m.quality))}
+      if(key==='folder'||key==='document'){
+        // With "no findings", source choices still need to include empty sources.
+        const sources=relaxed.presence==='no'?(options.sources||pages).filter(p=>folderMatches(p,relaxed.folder)&&filterChoice(relaxed.document,p.document)):scope.pages;
+        sourceFacets(sources)[key==='folder'?'folders':'documents'].forEach(value=>values.add(value));
+      }
+      if(key==='presence'){if(found.size)values.add('yes');if(scope.entities.some(e=>!found.has(e.id)))values.add('no');values.add('')}
+      facets[facet]=values;
+    }
+    return facets;
   }
   function relevance(matches,entities){
     let best=99;
@@ -145,6 +194,34 @@ var PriorityBalance = (() => {
     for(const source of records)if(source)for(const [key,p] of source.records)for(const v of p.versions.values())add(total,p.page,v.version,[...v.matches],source.pageRanks.get(key));
     return total;
   }
+  function priorityCoverage(entities,pages){
+    const levels=['Alta','Media','Baja'],byId=new Map(entities.map(e=>[e.id,e])),documents=new Map();
+    for(const p of pages)for(const v of p.versions){
+      const matches=v.matches.filter(m=>byId.has(m.entity));
+      if(!matches.length)continue;
+      if(!documents.has(p.document_id))documents.set(p.document_id,{document_id:p.document_id,document:p.document,folder:p.folder,levels:new Map(levels.map(level=>[level,record()]))});
+      const doc=documents.get(p.document_id);
+      for(const level of levels){const hits=matches.filter(m=>(byId.get(m.entity).priority||'Baja')===level);if(hits.length)add(doc.levels.get(level),p,v,hits,Math.min(...hits.map(m=>ranks[m.quality]??99)))}
+    }
+    function summarize(docs,level){
+      const records=docs.map(d=>d.levels.get(level)),all=combineRecords(records),byGroup={};
+      // One document belongs to its best evidence bucket within each priority.
+      // Its weaker pages remain available when drilling into that bucket.
+      for(const key of ['strong','review','context'])byGroup[key]=combineRecords(records.filter(r=>group(r.best)===key));
+      const found=new Set(materialize(all).flatMap(p=>p.versions.flatMap(v=>v.matches.map(m=>m.entity))));
+      return {record:all,byGroup,found:found.size};
+    }
+    const docs=[...documents.values()].sort((a,b)=>a.document.localeCompare(b.document)),folders=new Map();
+    for(const d of docs){if(!folders.has(d.folder))folders.set(d.folder,[]);folders.get(d.folder).push(d)}
+    const totals=new Map(levels.map(level=>[level,summarize(docs,level)]));
+    const folderRows=[...folders].sort(([a],[b])=>a.localeCompare(b)).flatMap(([folder,items])=>levels.map(priority=>({folder,document:'',priority,...summarize(items,priority)})));
+    const documentRows=docs.flatMap(doc=>levels.map(priority=>({folder:doc.folder,document:doc.document,document_id:doc.document_id,priority,...summarize([doc],priority)})));
+    return {levels,totals,folderRows,documentRows};
+  }
+  function priorityCoverageRows(report,scope='folder'){
+    return [['Agrupación','Carpeta','Documento','Prioridad','Documentos distintos','Páginas distintas','Referentes con hallazgos','Documentos con literal o variante','Documentos solo proximidad o aproximación','Documentos solo pistas de contexto'],
+      ...(scope==='document'?report.documentRows:report.folderRows).map(row=>{const n=count(row.record);return [scope==='document'?'Documento':'Carpeta',row.folder,row.document,row.priority,n.documents,n.pages,row.found,...['strong','review','context'].map(key=>count(row.byGroup[key]).documents)]})];
+  }
   function pageCombinations(entities,pages){
     const kinds=new Map(entities.map(e=>[e.id,e.kind])),combinations=new Map([1,2,4,3,5,6,7].map(mask=>[mask,record()])),distant=record(),total=record();
     const overlaps=(match,others)=>others.some(other=>match.offsets.some(([a,b])=>other.offsets.some(([x,y])=>a<y&&x<b)));
@@ -187,6 +264,6 @@ var PriorityBalance = (() => {
       while(index<events.length&&events[index][0]===position){const [,k,delta]=events[index++];counts[k]+=delta;}previous=position;
     }return ranges;
   }
-  return {ranks,scores,groups,group,pageKey,filterChoice,filterEntities,filterSource,filterEvidence,relevance,recordRelevance,count,materialize,audit,analyze,buildMatrix,buildCross,combineRecords,pageCombinations,generalRows,typedRanges};
+  return {ranks,scores,groups,group,pageKey,filterChoice,folderMatches,sourceFacets,filterEntities,filterSource,filterEvidence,filterScope,facetValues,relevance,recordRelevance,count,materialize,audit,analyze,buildMatrix,buildCross,combineRecords,priorityCoverage,priorityCoverageRows,pageCombinations,generalRows,typedRanges};
 })();
 if(typeof module!=='undefined'&&module.exports)module.exports=PriorityBalance;

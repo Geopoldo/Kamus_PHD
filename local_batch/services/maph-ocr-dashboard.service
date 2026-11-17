@@ -7,7 +7,7 @@ StartLimitBurst=5
 Type=simple
 Environment=MAPH_DASHBOARD_BIND=0.0.0.0
 Environment=MAPH_DASHBOARD_NETWORK=192.168.1.0/24
-Environment=MAPH_DASHBOARD_HOSTS=192.168.1.14:8091
+Environment=MAPH_DASHBOARD_HOSTS=192.168.1.16:8091
 WorkingDirectory=/home/ewok/Documents/ChatGPT/MAP-H-NOV14-CADDOCS
 ExecStart=/usr/bin/python3 /home/ewok/Documents/ChatGPT/MAP-H-NOV14-CADDOCS/local_batch/dashboard.py
 Restart=on-failure

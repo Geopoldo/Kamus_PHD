@@ -55,15 +55,14 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(by_label['Lawagamau/Katawagami']['priority'], 'Alta')
         self.assertEqual(by_label['Lake Abitibinorthwesterly drainage']['priority'], 'Media')
 
-    def test_nearness_and_confluence_are_different(self):
+    def test_near_full_names_only(self):
         for text in ['John Butterfly', 'John one Butterfly', 'John one two Butterfly']:
             match = self.matches(text, 'person:161')[0]
             self.assertIn(match['quality'], ('literal', 'near'))
-        m = self.matches('John one two three Butterfly', 'person:161')[0]
-        self.assertEqual(m['quality'], 'cooccurrence')
-        self.assertIn('personas diferentes', m['reason'])
-        self.assertEqual(self.matches('Butterfly, John', 'person:161')[0]['quality'], 'candidate')
-        self.assertEqual(self.matches('J. Butterfly', 'person:161')[0]['quality'], 'candidate')
+        self.assertEqual(self.matches('John one two three Butterfly', 'person:161'), [])
+        self.assertEqual(self.matches('John was here. Many unrelated words. Butterfly appeared elsewhere.', 'person:161'), [])
+        self.assertEqual(self.matches('Butterfly, John', 'person:161'), [])
+        self.assertEqual(self.matches('J. Butterfly', 'person:161'), [])
 
     def test_full_name_never_accepts_three_or_ten_intervening_words(self):
         person=dict(id='person:carlos',kind='person',sources=[],name_forms=[dict(first_name='Carlos',last_name='Gomez')],
@@ -72,8 +71,10 @@ class PriorityTests(unittest.TestCase):
         for gap in range(11):
             text='Carlos '+'word '*gap+'Gomez'
             matches=matcher.match(text)
-            self.assertTrue(matches)
-            self.assertEqual(matches[0]['quality'],'literal' if gap==0 else 'near' if gap<=2 else 'cooccurrence')
+            if gap<=2:
+                self.assertEqual(matches[0]['quality'],'literal' if gap==0 else 'near')
+            else:
+                self.assertEqual(matches, [])
         self.assertEqual(ps.MAX_INTERVENING_WORDS,2)
 
     def test_fuzzy_accents_hyphen_unicode_and_no_occurrence_cap(self):
@@ -89,7 +90,37 @@ class PriorityTests(unittest.TestCase):
         place = next(e for e in self.catalog['entities'] if e['label']=='Lawagamau/Katawagami')
         self.assertEqual(self.matches('Katawagami', place['id'])[0]['quality'], 'alias')
         area = next(e for e in self.catalog['entities'] if e['label'].startswith('Turgeon'))
-        self.assertEqual(self.matches('Harricana', area['id'])[0]['quality'], 'clue')
+        self.assertEqual(self.matches('Harricana', area['id']), [])
+
+    def test_never_join_paragraphs_but_keep_wrapped_lines(self):
+        for separator in ['\n\n', '\r\n \r\n', '\n \t\n', '\u2029', '\f', '\n>\n>']:
+            with self.subTest(separator=repr(separator)):
+                self.assertEqual(self.matches('John'+separator+'Butterfly', 'person:161'), [])
+                self.assertEqual(self.matches('John one'+separator+'two Butterfly', 'person:161'), [])
+                self.assertEqual(self.matches('John Butter'+separator+'fly', 'person:161'), [])
+        self.assertTrue(self.matches('John\nButterfly', 'person:161'))
+        self.assertTrue(self.matches('John Butter-\nfly', 'person:161'))
+        text='John\n\nButterfly. Later, John Butterfly arrived.'
+        matches=self.matches(text, 'person:161')
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]['offsets'][0][0], text.rindex('John'))
+
+    def test_complete_multiword_places_share_the_name_distance_limit(self):
+        entity=dict(id='place:test', kind='place', patterns=[
+            dict(label='Black Bear Point', terms=['black','bear','point'], origin='canonical', reason=''),
+            dict(label='Bear Point', terms=['bear','point'], origin='alias', reason='Explicit alias'),
+            dict(label='Black', terms=['black'], origin='generated', reason='Partial'),
+            dict(label='Point', terms=['point'], origin='context', reason='Anchor')])
+        matcher=ps.Matcher({'entities':[entity]})
+        for text in ['Black Bear Point','Black one Bear two Point','Bear one two Point','Black\nBear Point']:
+            with self.subTest(text=text):
+                self.assertTrue(matcher.match(text))
+        for text in ['Black Bear one two three Point','Black\n\nBear\n\nPoint','Black','Point']:
+            with self.subTest(text=text):
+                self.assertEqual(matcher.match(text), [])
+        strict=ps.Matcher({'entities':[dict(entity,patterns=entity['patterns'][:1])]})
+        self.assertEqual(strict.match('Black one two Bear three Point'), [], 'Two intervening words total, not per pair')
+        self.assertEqual(strict.match('Black Bea-\nr Point')[0]['quality'],'literal')
 
     def test_split_and_joined_words_are_reviewable(self):
         self.assertEqual(self.matches('JohnButterfly', 'person:161')[0]['origin'], 'spacing')
@@ -125,6 +156,8 @@ class PriorityTests(unittest.TestCase):
         self.assertEqual(set(versions), {'original', 'human', 'second_reading:pilot'})
         self.assertEqual(versions['human']['status'], 'validated')
         self.assertFalse(r['changed_during_run'])
+        self.assertEqual(r['search_policy'], ps.SEARCH_POLICY)
+        self.assertTrue(all(m['gap']<=2 and m['quality'] not in ('clue','cooccurrence') for p in r['pages'] for v in p['versions'] for m in v['matches']))
         self.assertEqual(ps.fingerprint(self.root, self.book), r['fingerprint'])
         (out/'page_0001.md').write_text('Changed original')
         self.assertNotEqual(ps.fingerprint(self.root, self.book), r['fingerprint'])

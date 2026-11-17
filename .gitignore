@@ -94,6 +94,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-graphrag/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -113,6 +114,7 @@ htmlcov/
 !pnpm-lock.yaml
 !uv.lock
 !poetry.lock
+!local_batch/requirements-graphrag.lock
 *.tmp
 *.swp
 *.swo

@@ -68,6 +68,20 @@ class RecalculationTests(unittest.TestCase):
             search._job.update(running=False,error='Do not retry indefinitely');search.get(self.root)
             self.assertEqual(start.call_count,1)
 
+    def test_old_matching_policy_is_hidden_during_recalculation(self):
+        (self.root/'priorities').mkdir()
+        (self.root/'progress.json').write_text(json.dumps({'documents':[]}))
+        path=self.root/'priorities/latest.json'
+        old=dict(engine='priorities-5',fingerprint='fixture',catalog=dict(revision=1),pages=[])
+        path.write_text(json.dumps(old))
+        with patch.object(search,'start',return_value={'running':True}) as start:
+            value=search.get(self.root)
+            self.assertTrue(value['stale'])
+            self.assertIsNone(value['result'])
+            self.assertTrue(value['job']['running'])
+            start.assert_called_once()
+        self.assertEqual(json.loads(path.read_text()),old)
+
     def test_a_newer_saved_revision_still_runs_after_previous_failure(self):
         revisions=[]
         def run(root,progress,catalog_snapshot,input_fingerprint):

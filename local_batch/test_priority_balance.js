@@ -30,6 +30,34 @@ assert.equal(B.filterSource({folder:'folder',document:'one.pdf',version:'second_
 assert.equal(B.filterSource({folder:'folder',document:'one.pdf',version:'original'},{version:['human','secondary']}),false);
 assert.equal(B.count(B.analyze(entities,filteredStructured).total).pages,2);
 
+// Priority indicators count documents once, using their best evidence per level.
+// Different pages/readings and different referents must not inflate a document.
+const coverageEntities=entities.map(e=>({...e,priority:e.id==='b'?'Media':e.id==='z'?'Baja':'Alta'}));
+const coveragePages=[...pages,
+ {...page('third',1,[v('original',[m('a','near')])]),folder:'folder/sub'},
+ {...page('third',2,[v('original',[m('a','candidate')])]),folder:'folder/sub'},
+ page('fourth',1,[v('original',[m('a','cooccurrence')])])];
+const coverage=B.priorityCoverage(coverageEntities,coveragePages),high=coverage.totals.get('Alta'),medium=coverage.totals.get('Media');
+assert.equal(B.count(high.record).documents,3);
+assert.equal(B.count(high.record).pages,5);
+assert.equal(high.found,2);
+assert.deepEqual(['strong','review','context'].map(k=>B.count(high.byGroup[k]).documents),[1,1,1]);
+assert.equal(B.count(high.byGroup.strong).pages,2,'Best-document bucket keeps its weaker pages available to inspect');
+assert.equal(B.count(medium.record).documents,2,'One source document can belong to several priorities');
+assert.deepEqual(['strong','review','context'].map(k=>B.count(medium.byGroup[k]).documents),[1,0,1]);
+assert.equal(B.count(coverage.totals.get('Baja').record).documents,0,'No-evidence criteria never create a source document');
+assert.equal(coverage.documentRows.length,12);
+assert.equal(coverage.folderRows.length,6,'Source subfolder stays separate from its parent');
+for(const r of [...coverage.totals.values(),...coverage.folderRows,...coverage.documentRows])assert.equal(['strong','review','context'].reduce((n,k)=>n+B.count(r.byGroup[k]).documents,0),B.count(r.record).documents,'Document evidence buckets are exclusive');
+const onlyAlias=B.filterEvidence(coveragePages,{version:['human'],quality:['alias']},new Set(['b']));
+const narrowed=B.priorityCoverage(B.filterEntities(coverageEntities,{refs:['b'],priority:['Media'],kind:['place']}),onlyAlias);
+assert.equal(B.count(narrowed.totals.get('Media').record).pages,1);
+assert.equal(B.count(narrowed.totals.get('Alta').record).documents,0);
+assert.equal(B.priorityCoverageRows(narrowed,'document').length,4);
+assert.equal(B.priorityCoverageRows(narrowed,'document')[2][4],1,'Export and displayed document totals use the same records');
+assert.equal(B.priorityCoverage([],coveragePages).documentRows.length,0);
+assert.equal(B.priorityCoverageRows(B.priorityCoverage(coverageEntities,[])).length,1);
+
 // Distinct source pages, exclusive best evidence buckets, and true zeros.
 const analysis=B.analyze(entities,pages);
 // The general export always includes zeros and inactive criteria, not screen filters.

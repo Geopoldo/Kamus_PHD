@@ -18,8 +18,11 @@ from content_search import normalize
 import priority_audit as audit
 
 WORKBOOK = Path('/home/ewok/Downloads/Book_priorities_15_11_2026.xlsx')
-ENGINE = 'priorities-5'
+ENGINE = 'priorities-6-full-phrases'
 MAX_INTERVENING_WORDS = 2
+PARAGRAPH_BREAK = re.compile(r'(?:\r?\n[ \t]*(?:>[ \t]*)?){2,}|[\f\u2029]')
+SEARCH_POLICY = dict(max_intervening_words=MAX_INTERVENING_WORDS, same_paragraph=True,
+                     full_terms_only=True, distant_name_matches=False, generated_partial_patterns=False)
 NS = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 QUALITY = {'literal': 0, 'alias': 1, 'near': 2, 'candidate': 3, 'cooccurrence': 4, 'clue': 5}
 SCORES = {'literal': 100, 'alias': 95, 'near': 85, 'candidate': 60, 'cooccurrence': 20, 'clue': 20}
@@ -229,7 +232,11 @@ def similar(term, word):
 
 class Matcher:
     def __init__(self, catalog):
-        self.patterns = [(e['id'], p) for e in catalog['entities'] if e.get('enabled', True) for p in e['patterns']]
+        # Search complete catalog phrases and explicitly supplied aliases. Automatic
+        # initials, shortened place names and geographic anchors are not identities.
+        # Keep their catalog definitions for provenance, but do not search them.
+        self.patterns = [(e['id'], p) for e in catalog['entities'] if e.get('enabled', True)
+                         for p in e['patterns'] if p['origin'] in ('canonical', 'alias')]
         fuzzy_terms = {t for _, p in self.patterns for t in p['terms']}
         spacing = {}
         for entity, p in self.patterns:
@@ -246,20 +253,17 @@ class Matcher:
         for term in fuzzy_terms:
             self.by_length[len(term)].append(term)
         self.cache = {}
-        self.confluences = []
-        families = {e['id']: e for e in catalog['entities'] if e['kind'] == 'surname'}
-        for e in catalog['entities']:
-            if e['kind'] != 'person' or not e.get('enabled', True):
-                continue
-            forms = e.get('name_forms') or [dict(first_name=s['cells']['B'], last_name=s['cells']['C']) for s in e['sources'] if s['cells'].get('B') and s['cells'].get('C')]
-            given = sorted({terms(f['first_name'])[0] for f in forms if terms(f['first_name'])})
-            surnames = [terms(f['last_name']) for f in forms]
-            if not e.get('name_forms') and e.get('surname_id') in families:
-                surnames += [p['terms'] for p in families[e['surname_id']]['patterns']]
-            self.confluences.append((e['id'], given, surnames))
 
     def match(self, text):
         tokens = tokens_with_offsets(text)
+        # A normal wrapped line is allowed, including OCR hyphenation. A blank
+        # line, form feed or Unicode paragraph separator starts a separate block.
+        blocks, block, previous_end = [], 0, 0
+        for _, start, end in tokens:
+            if PARAGRAPH_BREAK.search(text[previous_end:start]):
+                block += 1
+            blocks.append(block)
+            previous_end = end
         positions = collections.defaultdict(list)
         for i, (word, _, _) in enumerate(tokens):
             if word not in self.cache:
@@ -280,7 +284,7 @@ class Matcher:
                     allowed = set(positions[term])
                     for last, path, gap in paths:
                         for j in range(last+1, min(len(tokens), last+2+max_gap-gap)):
-                            if j in allowed:
+                            if j in allowed and blocks[j] == blocks[last]:
                                 next_paths.append((j, path+[j], gap+j-last-1))
                     paths = next_paths
                     if not paths:
@@ -310,25 +314,6 @@ class Matcher:
                        n['offsets'][0][0] <= a and b <= n['offsets'][-1][1] for n in matches):
                     continue
                 result.append(m)
-        matched_entities = {m['entity'] for m in result}
-        for entity, given, surnames in self.confluences:
-            if entity in matched_entities:
-                continue
-            first_positions = {i for name in given if len(name) >= 3 for i in positions[name]}
-            last_positions = set()
-            for surname in surnames:
-                if not surname:continue
-                for start in positions[surname[0]]:
-                    path = list(range(start, start+len(surname)))
-                    if all(i in positions[t] for i,t in zip(path,surname)):
-                        last_positions.update(path)
-            if not first_positions or not last_positions or not (first_positions - last_positions):
-                continue
-            indices = sorted(first_positions | last_positions)
-            result.append(dict(entity=entity, alias=' + '.join(given) + ' / ' + ' | '.join(' '.join(s) for s in surnames),
-                               quality='cooccurrence', approximate=any(tokens[i][0] not in given + [t for s in surnames for t in s] for i in indices),
-                               gap=None, origin='cooccurrence', reason='Nombre y apellido en la misma página, sin vínculo textual cercano. Puede tratarse de personas diferentes.',
-                               offsets=[(tokens[i][1], tokens[i][2]) for i in indices]))
         for m in result:
             m['score'] = SCORES[m['quality']]
         return sorted(result, key=lambda m: (m['offsets'][0][0], m['entity'], QUALITY[m['quality']]))
@@ -446,7 +431,7 @@ def run(root, workbook=WORKBOOK, progress=None, catalog_snapshot=None, input_fin
         e['score'] = sum([100, 95, 85, 60, 20, 20][rank] for rank in ranks)
     result = dict(engine=ENGINE, created=time.time(), seconds=time.time()-started, fingerprint=before,
                   changed_during_run=before != fingerprint(root, workbook), catalog=catalog, coverage=coverage,
-                  pages=pages, quality_labels=LABELS, score_policy=SCORES, max_intervening_words=MAX_INTERVENING_WORDS, summary=dict(pages=len(pages), documents=len({p['document'] for p in pages}),
+                  pages=pages, quality_labels=LABELS, score_policy=SCORES, search_policy=SEARCH_POLICY, max_intervening_words=MAX_INTERVENING_WORDS, summary=dict(pages=len(pages), documents=len({p['document'] for p in pages}),
                   entities_with_hits=len(hits_by_entity), entities_without_hits=catalog['active_count']-len(hits_by_entity),
                   active_entities=catalog['active_count'], disabled_entities=len(catalog['entities'])-catalog['active_count'], occurrences_by_quality=dict(qualities)))
     directory = root/'priorities'
@@ -522,9 +507,10 @@ def get(root):
     # Reuse the existing worker/queue and audit log; never rerun OCR here.
     if stale and not job.get('running') and not job.get('error'):
         job = start(root, requested_revision=revision, reason='saved_text_or_inventory_changed')
-    # Retired sources must stop appearing even while the replacement analysis runs.
+    # Retired sources and results from an obsolete matching policy must stop
+    # appearing while the replacement analysis runs; retain the file for history.
     active = {d['source'] for d in read_json(root/'progress.json')['documents']}
-    if result and any(p['document'] not in active for p in result.get('pages', [])):
+    if result and (result['engine'] != ENGINE or any(p['document'] not in active for p in result.get('pages', []))):
         result = None
         stale = True
     if result:result=dict(result,quality_labels=LABELS,max_intervening_words=MAX_INTERVENING_WORDS)

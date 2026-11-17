@@ -136,7 +136,7 @@ class SourceTests(unittest.TestCase):
         def runner(command,env):
             if 'model_run.py' in command[1]:
                 env=dict(env,PATH='/no-gpu-programs')
-            subprocess.run(command,env=env,check=True,capture_output=True)
+            subprocess.run(command,env=env,check=True,capture_output=True,pass_fds=(int(env['MAPH_SOURCE_LOCK_FD']),))
         source_worker.execute(self.root,job['id'],runner=runner,recalculate=lambda:None)
         manifest=sources.read(self.root/'model_audits'/('sources_'+job['id'])/'manifest.json')
         self.assertEqual(manifest['processed'],0);self.assertIsNone(manifest['gpu_info']);self.assertEqual(sources.job_status(self.root)['status'],'complete')
@@ -146,6 +146,7 @@ class SourceTests(unittest.TestCase):
         def failure(command,env):
             calls.append(command)
             self.assertEqual(json.loads(Path(env['MAPH_SOURCE_SCOPE']).read_text()),[item['source']])
+            if command[1].endswith('/inventory_audit.py'):return
             if command[1].endswith('/run.py') and '/audit/' not in command[1]:transcribed(self.root)
             else:raise RuntimeError('Synthetic stage failure')
         with self.assertRaises(RuntimeError):source_worker.execute(self.root,job['id'],runner=failure,recalculate=lambda:None)
@@ -158,7 +159,7 @@ class SourceTests(unittest.TestCase):
         source_worker.execute(self.root,resumed['id'],runner=runner,recalculate=lambda:calls.append(['analysis']))
         self.assertEqual(sources.job_status(self.root)['status'],'complete');self.assertFalse(sources.listing(self.root)['documents'][0]['pending']);self.assertEqual(calls[-1],['analysis'])
         stages=[json.loads(x)['stage'] for x in (self.root/'sources/events.jsonl').read_text().splitlines() if json.loads(x)['event']=='source_pipeline_stage']
-        self.assertEqual(stages[-6:],['inventory','transcription','rules_audit','model_audit','cross_analysis','complete'])
+        self.assertEqual(stages[-7:],['inventory','transcription','rules_audit','model_audit','embeddings','cross_analysis','complete'])
 
 
 class SourceHTTPTests(unittest.TestCase):
