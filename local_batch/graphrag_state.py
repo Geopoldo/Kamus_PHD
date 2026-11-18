@@ -33,3 +33,13 @@ def coverage_changes(records, previous):
     changed = sum(before[k]['text_sha256'] != after[k]['text_sha256'] or before[k]['version'] != after[k]['version'] for k in common)
     return dict(new_pages=len(after.keys() - before.keys()), changed_pages=changed,
                 unchanged_pages=len(common)-changed, removed_pages=len(before.keys()-after.keys()))
+
+
+def visible_run(directory):
+    """An extraction checkpoint can be explored before the full query index exists."""
+    pointer = read(directory / 'visible.json')
+    active = read(directory / 'active.json')
+    key = pointer.get('run_id', '')
+    if re.fullmatch(r'\d{8}T\d{6}', key) and pointer.get('published',0) >= active.get('published',0) and (directory/'runs'/key/'review.json').is_file():
+        return key
+    return available_run(directory)

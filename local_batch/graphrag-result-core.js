@@ -42,7 +42,7 @@
       const a=points[i],b=points[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.max(.01,Math.hypot(dx,dy)),f=Math.min(24,spacing*spacing*4/(d*d));
       force.get(a.id).x+=dx/d*f;force.get(a.id).y+=dy/d*f;force.get(b.id).x-=dx/d*f;force.get(b.id).y-=dy/d*f;
      }
-     for(const p of points)for(const other of adj.get(p.id)){if(other===p.id)continue;const q=byId.get(other),dx=q.x-p.x,dy=q.y-p.y,d=Math.max(1,Math.hypot(dx,dy)),f=(d-spacing*1.8)*.014;force.get(p.id).x+=dx/d*f;force.get(p.id).y+=dy/d*f}
+     for(const p of points)for(const other of adj.get(p.id)){if(other===p.id)continue;const q=byId.get(other),dx=q.x-p.x,dy=q.y-p.y,d=Math.max(1,Math.hypot(dx,dy)),f=(d-spacing*1.5)*.05;force.get(p.id).x+=dx/d*f;force.get(p.id).y+=dy/d*f}
      for(const p of points){const f=force.get(p.id),cool=.2+.8*(1-step/260);p.x=Math.max(x+24,Math.min(x+w-24,p.x+Math.max(-12,Math.min(12,f.x))*cool));p.y=Math.max(y+24,Math.min(y+h-24,p.y+Math.max(-12,Math.min(12,f.y))*cool))}
     }
     // A final collision pass preserves distinguishable clickable nodes.
@@ -88,5 +88,25 @@
   for(const field of ['event_time','document_time'])evidence_counts[field+'_identified']=relationships.filter(e=>e.fields?.[field]&&e.fields[field].toLowerCase()!=='unknown').length;
   return {...graph,nodes,relationships,selection,pages:selection.length,source_documents:new Set(selection.map(p=>p.document)).size,entity_counts,evidence_counts,communities:[],query:null,spot_checks:null,rejected_candidates:[],source_filters:filters};
  }
- const api={overview,zoomAt,gesture,labelIds,matchesSource,filterSources};if(typeof module!=='undefined')module.exports=api;else root.GraphResultCore=api;
+ // A focused view retains the induced subgraph (including links between neighbors).
+ // Springs bring linked entities closer; repulsion leaves room for labels. The
+ // anchor stays fixed, and IDs/types/assertions are never changed by the layout.
+ function focusLayout(layout,anchor){
+  const ids=new Set([anchor]);for(const l of layout.links){if(l.source===anchor)ids.add(l.target);if(l.target===anchor)ids.add(l.source)}
+  const center=layout.nodes.find(n=>n.id===anchor);if(!center)return [];
+  const others=layout.nodes.filter(n=>n.id!==anchor&&ids.has(n.id)).sort((a,b)=>Math.atan2(a.y-center.y,a.x-center.x)-Math.atan2(b.y-center.y,b.x-center.x));
+  const radius=Math.max(180,Math.sqrt(others.length)*65),points=[{id:anchor,x:0,y:0},...others.map((n,i)=>({id:n.id,x:radius*Math.cos(i*2*Math.PI/others.length),y:radius*Math.sin(i*2*Math.PI/others.length)}))],byId=new Map(points.map(n=>[n.id,n]));
+  const links=layout.links.filter(l=>ids.has(l.source)&&ids.has(l.target)&&l.source!==l.target);
+  for(let step=0;step<180;step++){
+   const forces=new Map(points.map(n=>[n.id,{x:-n.x*.008,y:-n.y*.008}]));
+   for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++){
+    const a=points[i],b=points[j],dx=b.x-a.x,dy=b.y-a.y,d=Math.max(.1,Math.hypot(dx,dy)),strength=Math.min(30,90000/(d*d));
+    forces.get(a.id).x-=dx/d*strength;forces.get(a.id).y-=dy/d*strength;forces.get(b.id).x+=dx/d*strength;forces.get(b.id).y+=dy/d*strength;
+   }
+   for(const l of links){const a=byId.get(l.source),b=byId.get(l.target),dx=b.x-a.x,dy=b.y-a.y,d=Math.max(.1,Math.hypot(dx,dy)),f=(d-(l.source===anchor||l.target===anchor?radius:140))*.035;forces.get(a.id).x+=dx/d*f;forces.get(a.id).y+=dy/d*f;forces.get(b.id).x-=dx/d*f;forces.get(b.id).y-=dy/d*f}
+   for(const p of points){if(p.id===anchor)continue;const f=forces.get(p.id),cool=1-step/220;p.x+=Math.max(-10,Math.min(10,f.x))*cool;p.y+=Math.max(-10,Math.min(10,f.y))*cool}
+  }
+  return points;
+ }
+ const api={overview,focusLayout,zoomAt,gesture,labelIds,matchesSource,filterSources};if(typeof module!=='undefined')module.exports=api;else root.GraphResultCore=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

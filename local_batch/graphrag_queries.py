@@ -85,7 +85,6 @@ def create(root, payload, launch=True):
     jobs = root/'knowledge_graph/questions'; jobs.mkdir(parents=True,exist_ok=True)
     with (jobs/'create.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        if any(job['status'] in ACTIVE for job in listing(root)): raise ValueError('Ya hay una pregunta en curso. Espera su resultado antes de ejecutar otra.')
         ident = uuid.uuid4().hex
         path = path_for(root,ident)
         value = dict(id=ident,run_id=ident,question=question.strip(),author=author.strip(),mode=mode,

@@ -5,6 +5,7 @@ import json
 import re
 import unicodedata
 from pathlib import Path
+from content_search_query import LOGICAL_MODES, parse_boolean, evaluate_boolean
 
 
 def normalize(text):
@@ -22,6 +23,8 @@ def read_json(path):
 def parse_query(query, mode):
     if query.count('"') % 2:
         raise ValueError('Cierra las comillas de la frase')
+    if mode in LOGICAL_MODES:
+        return parse_boolean(query, normalize)[0]
     criteria = []
     for match in re.finditer(r'"([^"\n]+)"|([\w]+)', query):
         label = match.group(1) or match.group(2)
@@ -41,7 +44,7 @@ def match_text(text, criteria, mode, similarity):
     tokens = list(re.finditer(r'\w+', text))
     words = [normalize(t.group()) for t in tokens]
     found = []
-    fuzzy = mode in ('flexible', 'approximate')
+    fuzzy = mode in ('flexible', 'approximate', 'boolean_approximate')
     def equal(term, word):
         if term == word:
             return True
@@ -53,7 +56,7 @@ def match_text(text, criteria, mode, similarity):
         return similarity[key]
     for criterion in criteria:
         terms = criterion['terms']
-        spans, approximate = [], False
+        spans, approximate, occurrences = [], False, []
         for i, word in enumerate(words):
             if not equal(terms[0], word):
                 continue
@@ -70,20 +73,33 @@ def match_text(text, criteria, mode, similarity):
                     break
             for _, path, _ in paths:
                 spans.extend((tokens[j].start(), tokens[j].end()) for j in path)
-                approximate |= any(terms[k] != words[j] for k, j in enumerate(path))
+                is_approximate = any(terms[k] != words[j] for k, j in enumerate(path))
+                approximate |= is_approximate
+                occurrences.append(dict(text=text[tokens[path[0]].start():tokens[path[-1]].end()],
+                                        words=[tokens[j].group() for j in path],
+                                        approximate=is_approximate))
         if spans:
+            # Distinct literal spellings, with counts; offsets still retain all occurrences.
+            variants = {}
+            for occurrence in occurrences:
+                key = (occurrence['text'], occurrence['approximate'])
+                if key not in variants:
+                    variants[key] = {**occurrence, 'count': 0}
+                variants[key]['count'] += 1
             found.append(dict(criterion=criterion['id'], label=criterion['label'],
-                              approximate=approximate, offsets=sorted(set(spans))))
-    if mode != 'flexible' and len(found) != len(criteria):
+                              approximate=approximate, exact=any(not o['approximate'] for o in occurrences),
+                              variants=list(variants.values()), offsets=sorted(set(spans))))
+    if mode not in ('flexible', *LOGICAL_MODES) and len(found) != len(criteria):
         return []
     return found
 
 
 def search(root, query, mode='flexible', document_id=None, page_number=None, include_text=False):
     query = query.strip()
-    if not 2 <= len(query) <= 200 or mode not in ('words', 'phrase', 'approximate', 'flexible'):
+    if not 2 <= len(query) <= 200 or mode not in ('words', 'phrase', 'approximate', 'flexible', *LOGICAL_MODES):
         raise ValueError('Use 2–200 characters and a valid search mode')
     criteria = parse_query(query, mode)
+    expression = parse_boolean(query, normalize)[1] if mode in LOGICAL_MODES else None
     similarity = {}
     docs = read_json(root / 'progress.json').get('documents', [])
     # Only secondary readings tied to a known corpus page are included.
@@ -120,7 +136,8 @@ def search(root, query, mode='flexible', document_id=None, page_number=None, inc
             matches = []
             for text, version, status in variants:
                 found = match_text(text, criteria, mode, similarity)
-                if not found and not include_text:
+                satisfies = evaluate_boolean(expression, {c['criterion'] for c in found}) if expression else bool(found)
+                if (not satisfies and not include_text) or not text.strip():
                     continue
                 locations = sorted({tuple(span) for item in found for span in item['offsets']})
                 approximate = any(item['approximate'] for item in found)
@@ -132,7 +149,9 @@ def search(root, query, mode='flexible', document_id=None, page_number=None, inc
                     excerpts.append((max(0, start-100), min(len(text), end+160)))
                     if len(excerpts) >= 20:
                         break
-                matches.append(dict(version=version, status=status, approximate=approximate, criteria=found, text_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                matches.append(dict(version=version, status=status, approximate=approximate, criteria=found,
+                                    query_matches=satisfies, missing_criteria=[c['id'] for c in criteria if c['id'] not in {f['criterion'] for f in found}],
+                                    text_sha256=hashlib.sha256(text.encode()).hexdigest(),
                                     **({'text': text} if include_text else {}),
                                     excerpts=[dict(text=text[a:b], highlights=[(s-a,e-a) for s,e in locations if a<=s and e<=b]) for a,b in excerpts]))
             if matches:
@@ -140,5 +159,5 @@ def search(root, query, mode='flexible', document_id=None, page_number=None, inc
                                  folder=doc['folder'], page=page, matches=matches,
                                  matched_criteria=sorted({c['criterion'] for m in matches for c in m['criteria']})))
     hits.sort(key=lambda h: (-len(h['matched_criteria']), all(m['approximate'] for m in h['matches']), h['folder'], h['document'], h['page']))
-    return dict(query=query, mode=mode, criteria=criteria, pages_searched=scanned, pages_without_text=missing,
+    return dict(query=query, mode=mode, criteria=criteria, expression=expression, pages_searched=scanned, pages_without_text=missing,
                 total_pages=len(hits), documents=len({h['document'] for h in hits}), hits=hits)

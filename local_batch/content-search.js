@@ -13,12 +13,36 @@ function searchButton(label,action){const b=se('button',label);b.type='button';b
 // Filter at reading level: never assemble criteria from different versions.
 function searchFilterHits(data,filters,omit=''){
  const f={...filters};delete f[omit];
- return data.hits.filter(h=>(!f.folder||h.folder===f.folder)&&(!f.document||h.document===f.document)).map(h=>({...h,matches:h.matches.filter(m=>(!f.version||m.version.split(':')[0]===f.version)&&(!f.criterion||m.criteria.some(c=>String(c.criterion)===f.criterion))&&m.criteria.length>=Number(f.minimum||1)&&(!f.kind||(f.kind==='approximate'?m.approximate:!m.approximate)))})).filter(h=>h.matches.length);
+ const minimum=f.minimum==null||f.minimum===''?(data.mode?.startsWith('boolean')?0:1):Number(f.minimum);
+ return data.hits.filter(h=>(!f.folder||h.folder===f.folder)&&(!f.document||h.document===f.document)).map(h=>({...h,matches:h.matches.filter(m=>m.query_matches!==false&&(!f.version||m.version.split(':')[0]===f.version)&&(!f.criterion||m.criteria.some(c=>String(c.criterion)===f.criterion))&&m.criteria.length>=minimum&&(!f.kind||(f.kind==='approximate'?m.approximate:!m.approximate)))})).filter(h=>h.matches.length);
 }
 function searchSortedHits(hits,sort){return [...hits].sort(sort==='document'?(a,b)=>a.document.localeCompare(b.document)||a.page-b.page:(a,b)=>Math.max(...b.matches.map(m=>m.criteria.length))-Math.max(...a.matches.map(m=>m.criteria.length))||Number(a.matches.every(m=>m.approximate))-Number(b.matches.every(m=>m.approximate))||a.document.localeCompare(b.document)||a.page-b.page)}
 function searchUnicodeSlice(text,start,end){return Array.from(text).slice(start,end).join('')}
 function searchVersionName(version){return version==='human'?sl(18):version==='original'?sl(17):sl(19)+' · '+version.split(':')[1]}
 function searchReadingStatus(match){return match.status==='stale'?searchText('Original modificado: comparar de nuevo','Original changed: compare again','Original modifié : comparer à nouveau'):sl(match.status==='validated'?24:match.version==='human'?25:23)}
+// Chips edit the query, never the results. The server owns Boolean evaluation.
+function searchChipTokens(query){
+ const raw=[...query.matchAll(/"[^"\n]*"|"[^"\n]*$|[()]|[^\s()"]+/gu)].map(m=>m[0]);
+ const tokens=[];for(const token of raw){const previous=tokens.at(-1),ends=previous&&(!['AND','OR','NOT','('].includes(previous)),starts=!['AND','OR',')'].includes(token);if(ends&&starts)tokens.push('AND');tokens.push(token)}return tokens;
+}
+function searchRemoveChip(tokens,index){
+ const next=[...tokens],term=!['AND','OR','NOT','(',')'].includes(next[index]);next.splice(index,1);
+ if(term){while(next[index-1]==='NOT'){next.splice(--index,1)}if(['AND','OR'].includes(next[index-1]))next.splice(index-1,1);else if(['AND','OR'].includes(next[index]))next.splice(index,1)}return next;
+}
+function searchMatchDetails(match,criteria){
+ const box=se('div');box.className='simple-match-terms';
+ const groups={exact:[],approximate:[],missing:[]};
+ for(const criterion of match.criteria){
+  const variants=criterion.variants?.length?criterion.variants:[{text:null,approximate:criterion.approximate}];
+  for(const variant of variants){const text=criterion.label+(variant.text?' → “'+variant.text+'”':'')+(variant.count>1?' ×'+variant.count:'');groups[variant.approximate?'approximate':'exact'].push(text)}
+ }
+ const present=new Set(match.criteria.map(c=>c.criterion));for(const criterion of criteria||[])if(!present.has(criterion.id))groups.missing.push(criterion.label);
+ for(const [kind,texts]of Object.entries(groups)){if(!texts.length)continue;const group=se('div');group.className='simple-term-group';group.dataset.kind=kind;
+  const label=kind==='exact'?searchText('Exactas','Exact','Exactes'):kind==='approximate'?searchText('Aproximadas · revisar','Approximate · review','Approximatives · vérifier'):searchText('No aparecen','Not found','Absents');group.append(se('strong',label));
+  const append=(host,items)=>{for(const text of items){const chip=se('span',text);chip.className='simple-term-match';host.append(chip)}};append(group,texts.slice(0,6));
+  if(texts.length>6){const more=se('details');more.append(se('summary',searchText('Ver todas las variantes','Show all variants','Voir toutes les variantes')+' · '+texts.length));append(more,texts.slice(6));group.append(more)}box.append(group);
+ }return box;
+}
 function searchQuote(excerpt){const quote=se('blockquote');let offset=0;for(const [a,b]of excerpt.highlights){if(a<offset)continue;quote.append(document.createTextNode(searchUnicodeSlice(excerpt.text,offset,a)),se('mark',searchUnicodeSlice(excerpt.text,a,b)));offset=b}quote.append(document.createTextNode(searchUnicodeSlice(excerpt.text,offset)));return quote}
 function searchSelectionSync(){
  if(typeof matrixSelection==='undefined')return;
@@ -40,7 +64,7 @@ async function openSearchSource(source,page,preferredVersion){
  const message=se('p',sl(20));message.setAttribute('role','status');sourcePopup.append(message);if(!sourcePopup.open)sourcePopup.showModal();
  try{
   const response=await fetch('/content-search-page?'+new URLSearchParams({q:searchData.query,mode:searchData.mode,document:hit.document_id,page}),{cache:'no-store',signal:popupAbort.signal});if(!response.ok)throw Error();const data=await response.json();if(request!==popupRequest||!sourcePopup.open)return false;
-  const matches=data.hits[0]?.matches||[];message.textContent=searchText('Compara la imagen original con la lectura resaltada. Selecciona la lectura si aporta evidencia a tu investigación.','Compare the original image with the highlighted reading. Select the reading if it contributes evidence to your research.','Comparez l’image originale à la lecture surlignée. Sélectionnez la lecture si elle apporte des éléments à votre recherche.');
+  const matches=(data.hits[0]?.matches||[]).filter(m=>m.query_matches!==false);message.textContent=searchText('Compara la imagen original con la lectura resaltada. Selecciona la lectura si aporta evidencia a tu investigación.','Compare the original image with the highlighted reading. Select the reading if it contributes evidence to your research.','Comparez l’image originale à la lecture surlignée. Sélectionnez la lecture si elle apporte des éléments à votre recherche.');
   if(!matches.length){message.textContent=searchText('El texto cambió y ya no contiene esta coincidencia. Actualiza la búsqueda antes de seleccionar.','The text changed and no longer contains this match. Refresh the search before selecting.','Le texte a changé et ne contient plus cette correspondance. Actualisez la recherche avant de sélectionner.');return true}
   const tools=se('div');tools.className='source-popup-tools';const wrap=se('label',searchText('Lectura que estás comprobando','Reading you are checking','Lecture à vérifier')),select=se('select');select.setAttribute('aria-label',wrap.textContent);matches.forEach((m,i)=>{const o=se('option',searchVersionName(m.version)+' · '+searchReadingStatus(m));o.value=String(i);select.append(o)});const wanted=matches.findIndex(m=>m.version===preferredVersion);select.value=String(wanted<0?0:wanted);wrap.append(select);tools.append(wrap);sourcePopup.append(tools);
   const panes=se('div');panes.className='source-popup-panes';const imagePane=se('section');imagePane.className='simple-image-pane';const imageTools=se('div');imageTools.className='simple-pane-heading';imageTools.append(se('strong',searchText('Imagen original','Original image','Image originale')));const imageBox=se('div');imageBox.className='source-popup-image';const image=se('img');image.alt=source+' · '+sl(13)+' '+page;image.src='/page-image?'+new URLSearchParams({document:hit.document_id,page});image.onerror=()=>imageBox.replaceChildren(se('p',searchText('Imagen no disponible. Puedes consultar la lectura y reintentar.','Image unavailable. You can read the text and retry.','Image indisponible. Vous pouvez consulter le texte et réessayer.')),searchButton(searchText('Reintentar imagen','Retry image','Réessayer l’image'),()=>{imageBox.replaceChildren(image);image.src='/page-image?'+new URLSearchParams({document:hit.document_id,page,t:Date.now()})}));imageBox.append(image);
@@ -53,6 +77,7 @@ async function openSearchSource(source,page,preferredVersion){
   for(const [label,delta]of [[searchText('← Fuente anterior','← Previous source','← Source précédente'),-1],[searchText('Siguiente fuente →','Next source →','Source suivante →'),1]]){if(delta===1&&position>=0)navigation.append(se('small',(position+1)+' / '+scoped.length));const button=searchButton(label,()=>{const next=scoped[position+delta];return openSearchSource(next.document,next.page,next.matches.some(m=>m.version===matches[Number(select.value)].version)?matches[Number(select.value)].version:next.matches[0].version)});button.disabled=position<0||!scoped[position+delta];navigation.append(button)}
   function paint(){const m=matches[Number(select.value)];textBox.replaceChildren();const pre=se('div');pre.className='source-popup-transcription';const ranges=m.criteria.flatMap(c=>c.offsets).sort((a,b)=>a[0]-b[0]);let end=0;marks=[];for(const [a,b]of ranges){if(a<end)continue;pre.append(document.createTextNode(searchUnicodeSlice(m.text,end,a)));const mark=se('mark',searchUnicodeSlice(m.text,a,b));marks.push(mark);pre.append(mark);end=b}pre.append(document.createTextNode(searchUnicodeSlice(m.text,end)));textBox.append(pre);index=0;
    selection.replaceChildren(matrixToggle({...hit,matches},m.version),searchButton(searchText('Mi selección →','My selection →','Ma sélection →'),async()=>{await sourcePopup.close();if(!sourcePopup.open)showView('selection')}));selection.append(se('small',searchText('Seleccionar no valida la transcripción.','Selecting does not validate the transcription.','Sélectionner ne valide pas la transcription.')));requestAnimationFrame(()=>{if(request===popupRequest&&sourcePopup.open)navigate(0)});searchSelectionSync()
+   const reasons=searchMatchDetails(m,data.criteria);reasons.classList.add('source-popup-reasons');textBox.prepend(reasons);
   }select.onchange=paint;paint();return true;
  }catch(error){if(request===popupRequest&&error.name!=='AbortError'){message.textContent=sl(21);sourcePopup.append(searchButton(searchText('Reintentar','Retry','Réessayer'),()=>openSearchSource(source,page,preferredVersion)))}return false}
 }
@@ -100,14 +125,51 @@ async function runContentSearch(query,mode){
 // Keep explicit selections intact: the user must corroborate a changed reading.
 const searchSaveReview=uSave;uSave=async function(...args){const revision=u.page?.revision;const result=await searchSaveReview(...args);if(result&&u.page?.revision!==revision&&activeView==='search'&&searchLastRequest)runContentSearch(searchLastRequest.query,searchLastRequest.mode);return result};
 window.addEventListener('focus',()=>{if(activeView==='search'&&searchLastRequest&&!searchBusy)runContentSearch(searchLastRequest.query,searchLastRequest.mode)});
+function searchLogicalBuilder(host,input,mode){
+ const section=se('section');section.className='simple-query-builder';
+ const toggleLabel=se('label'),toggle=se('input');toggle.type='checkbox';toggle.checked=Boolean(searchUI.chips)&&mode.value.startsWith('boolean');
+ toggleLabel.append(toggle,document.createTextNode(searchText('Editar consulta con chips lógicos','Edit query with logical chips','Modifier la requête avec des pastilles logiques')));
+ const body=se('div');body.className='simple-query-body';body.id='simple-query-chips';toggle.setAttribute('aria-controls',body.id);
+ const help=se('p',searchText('Pulsa una palabra para elegir: debe aparecer, alternativa o excluir. AND une condiciones · OR ofrece alternativas · NOT excluye. Prioridad: NOT → AND → OR; los paréntesis agrupan. Se evalúa cada lectura por separado.','AND requires both · OR accepts either · NOT excludes. Precedence: NOT → AND → OR; parentheses group terms. Each reading is evaluated separately.','AND exige les deux · OR accepte l’un ou l’autre · NOT exclut. Priorité : NOT → AND → OR ; les parenthèses regroupent. Chaque lecture est évaluée séparément.'));
+ const chips=se('div');chips.className='simple-query-chips';chips.setAttribute('aria-label',searchText('Términos y operadores de la consulta','Query terms and operators','Termes et opérateurs de la requête'));
+ const actions=se('div');actions.className='simple-query-actions';
+ const update=tokens=>{input.value=tokens.join(' ');input.dispatchEvent(new Event('input',{bubbles:true}))};
+ function paint(){chips.replaceChildren();const tokens=searchChipTokens(input.value);for(const [index,token]of tokens.entries()){
+   if(token==='AND'||token==='OR'){const operator=se('select');operator.className='simple-chip-operator';operator.setAttribute('aria-label',searchText('Operador ','Operator ','Opérateur ')+(index+1));for(const [value,label]of [['AND',searchText('Y · AND','AND','ET · AND')],['OR',searchText('O · OR','OR','OU · OR')]]){const option=se('option',label);option.value=value;operator.append(option)}operator.value=token;operator.onchange=()=>{tokens[index]=operator.value;update(tokens)};chips.append(operator);continue}
+   const chip=se('span');chip.className='simple-query-chip';chip.dataset.kind=token==='NOT'?'not':['(',')'].includes(token)?'group':'term';chip.append(se('span',token==='NOT'?searchText('NO · NOT','NOT','NON · NOT'):token));
+   if(chip.dataset.kind==='term'){
+    chip.firstChild.remove();const menu=se('details');menu.className='simple-word-menu';const title=se('summary',token+' ▾');title.setAttribute('aria-label',searchText('Cambiar condición de ','Change condition for ','Modifier la condition de ')+token);menu.append(title);
+    const choices=se('div');choices.className='simple-word-choices';choices.append(se('strong',searchText('Cómo usar esta palabra','How to use this word','Comment utiliser ce mot')));
+    const negative=tokens[index-1]==='NOT',connectorIndex=negative?index-2:index-1,connector=['AND','OR'].includes(tokens[connectorIndex])?tokens[connectorIndex]:null;
+    for(const [kind,label,hint]of [
+     ['AND',searchText('Debe aparecer','Must appear','Doit apparaître'),searchText('Y · junto con la condición anterior','AND · with the preceding condition','ET · avec la condition précédente')],
+     ['OR',searchText('Puede aparecer como alternativa','May appear as an alternative','Peut apparaître comme alternative'),searchText('O · esta palabra o la condición anterior','OR · this word or the preceding condition','OU · ce mot ou la condition précédente')],
+     ['NOT',searchText('Excluir esta palabra','Exclude this word','Exclure ce mot'),searchText('NO · debe estar ausente','NOT · must be absent','NON · doit être absent')]]){
+     const choice=searchButton(label,()=>{const next=[...tokens];let position=index;if(negative){next.splice(position-1,1);position--}if(kind==='NOT')next.splice(position,0,'NOT');else if(connector)next[position-1]=kind;update(next);const target=chips.querySelectorAll('.simple-word-menu summary');target[[...tokens.slice(0,index)].filter(t=>!['AND','OR','NOT','(',')'].includes(t)).length]?.focus()});
+     choice.disabled=kind==='OR'&&!connector;choice.setAttribute('aria-pressed',String(kind==='NOT'?negative:!negative&&(kind==='AND'?connector!=='OR':connector==='OR')));choice.append(se('small',hint));choices.append(choice);
+    }menu.append(choices);chip.append(menu);chip.dataset.excluded=String(negative);
+   }
+   const remove=searchButton('×',()=>update(searchRemoveChip(tokens,index)));remove.setAttribute('aria-label',searchText('Quitar ','Remove ','Retirer ')+token);chip.append(remove);chips.append(chip);
+  }if(!tokens.length)chips.append(se('span',searchText('Escribe arriba para crear tus chips.','Type above to create your chips.','Écrivez ci-dessus pour créer vos pastilles.')));
+ }
+ for(const operator of ['AND','OR','NOT'])actions.append(searchButton('+ '+operator,()=>{input.value=input.value.trim()+(input.value.trim()?' ':'')+operator+' ';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();input.setSelectionRange(input.value.length,input.value.length)}));
+ actions.append(searchButton(searchText('( Agrupar )','( Group )','( Regrouper )'),()=>{const start=input.selectionStart??0,end=input.selectionEnd??0;if(!input.value.trim())return;input.value=start!==end?input.value.slice(0,start)+'( '+input.value.slice(start,end)+' )'+input.value.slice(end):'( '+input.value+' )';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus()}));
+ const note=se('small',searchText('También puedes escribir la expresión. Los operadores van en MAYÚSCULAS. Los chips preparan la consulta; pulsa Buscar para ejecutarla.','You can also type the expression. Operators use UPPERCASE. Chips prepare the query; press Search to run it.','Vous pouvez aussi écrire l’expression. Opérateurs en MAJUSCULES. Les pastilles préparent la requête ; cliquez sur Chercher pour l’exécuter.'));
+ body.append(help,chips,actions,note);section.append(toggleLabel,body);host.append(section);
+ function visibility(){searchUI.chips=toggle.checked;body.hidden=!toggle.checked;toggle.setAttribute('aria-expanded',String(toggle.checked));paint()}
+ toggle.onchange=()=>{if(toggle.checked&&!mode.value.startsWith('boolean'))mode.value=['flexible','approximate'].includes(mode.value)?'boolean_approximate':'boolean';visibility()};
+ mode.addEventListener('change',()=>{if(!mode.value.startsWith('boolean'))toggle.checked=false;visibility()});
+ visibility();input.addEventListener('input',paint);
+}
 function drawSearch(){
  searchLanguage=uiLanguage;
  const old=searchView.querySelector('input[type=search]'),value=old?old.value:searchLastRequest?.query||'',mode=searchView.querySelector('form select')?.value||searchLastRequest?.mode||'flexible';
  searchView.replaceChildren();const heading=se('div');heading.className='simple-heading';const intro=se('div');intro.append(se('span',searchText('ENCUENTRA · COMPRUEBA · SELECCIONA','FIND · CHECK · SELECT','CHERCHEZ · VÉRIFIEZ · SÉLECTIONNEZ')),se('h1',sl(1)),se('p',searchText('Encuentra un fragmento, compáralo con el original y guarda la lectura que te sirve.','Find an excerpt, compare it with the original and keep the reading you need.','Trouvez un extrait, comparez-le à l’original et gardez la lecture utile.')));heading.append(intro,searchButton(searchText('Mi selección y exportación →','My selection and export →','Ma sélection et export →'),()=>showView('selection')));searchView.append(heading);
  const form=se('form'),label=se('label',searchText('¿Qué quieres encontrar?','What are you looking for?','Que recherchez-vous ?')),input=se('input');input.type='search';input.required=true;input.minLength=2;input.maxLength=200;input.placeholder=sl(3);input.value=value;label.append(input);
- const modeLabel=se('label',searchText('Cómo buscar','Search mode','Mode de recherche')),select=se('select');select.setAttribute('aria-label',modeLabel.textContent);['flexible','words','approximate','phrase'].forEach((v,i)=>{const o=se('option',i===0?searchText('Flexible · incluye resultados parciales','Flexible · includes partial matches','Flexible · résultats partiels inclus'):sl(({words:4,approximate:6,phrase:5})[v]));o.value=v;select.append(o)});select.value=mode;modeLabel.append(select);modeLabel.className='simple-mode';
+ const modeLabel=se('label',searchText('Cómo buscar','Search mode','Mode de recherche')),select=se('select');select.setAttribute('aria-label',modeLabel.textContent);for(const [v,label]of [['flexible',searchText('Flexible · incluye resultados parciales','Flexible · includes partial matches','Flexible · résultats partiels inclus')],['words',sl(4)],['approximate',sl(6)],['phrase',sl(5)],['boolean',searchText('Lógica · coincidencias exactas','Logic · exact matches','Logique · correspondances exactes')],['boolean_approximate',searchText('Lógica · incluir aproximadas','Logic · include approximate matches','Logique · inclure les approximations')]]){const o=se('option',label);o.value=v;select.append(o)}select.value=mode;modeLabel.append(select);modeLabel.className='simple-mode';
  const button=se('button',sl(7));button.type='submit';button.disabled=searchBusy;form.append(label,modeLabel,button);searchView.append(form);
- const tip=se('p',searchText('Para buscar un nombre completo, usa comillas dobles: "Billy Isaac".','For a full name, use double quotation marks: "Billy Isaac".','Pour un nom complet, utilisez des guillemets droits : "Billy Isaac".'));tip.className='simple-tip';searchView.append(tip);
+ searchLogicalBuilder(searchView,input,select);
+ const tip=se('p',searchText('Usa comillas para un nombre completo: "Billy Isaac". Para escribir AND, OR o NOT, elige un modo lógico. Las coincidencias exactas ignoran mayúsculas y acentos.','Quote a full name: "Billy Isaac". To write AND, OR or NOT, choose a logical mode. Exact matches ignore case and accents.','Mettez un nom complet entre guillemets : "Billy Isaac". Pour écrire AND, OR ou NOT, choisissez un mode logique. Les correspondances exactes ignorent la casse et les accents.'));tip.className='simple-tip';searchView.append(tip);
  const help=se('details');help.className='simple-help';help.append(se('summary',searchText('Cómo se buscan y actualizan las coincidencias','How matches are found and refreshed','Recherche et actualisation des correspondances')),se('p',searchText('Flexible incluye criterios parciales y variantes de escritura. Entre comillas, las palabras deben aparecer en orden con hasta dos palabras intermedias en total. «Frase en orden» exige palabras consecutivas. Se buscan originales, ediciones humanas y segundas lecturas, cada una por separado.','Flexible includes partial criteria and spelling variants. Quoted words must appear in order with up to two intervening words in total. “Phrase in order” requires consecutive words. Original, human-edited and second readings are searched separately.','Flexible inclut des critères partiels et des variantes. Les mots entre guillemets doivent apparaître dans l’ordre avec au plus deux mots intercalés au total. « Expression dans l’ordre » exige des mots consécutifs. Les originaux, corrections humaines et secondes lectures sont recherchés séparément.')),se('p',searchText('Al volver a esta pestaña o guardar una corrección se actualiza la consulta. Tu selección se conserva. Seleccionar una lectura no valida su transcripción.','Returning to this tab or saving a correction refreshes the search. Your selection is kept. Selecting a reading does not validate its transcription.','Revenir à cet onglet ou enregistrer une correction actualise la recherche. Votre sélection est conservée. Sélectionner une lecture ne valide pas sa transcription.')));searchView.append(help);
  const status=se('p',searchBusy?sl(20):'');status.setAttribute('role','status');status.dataset.searchStatus='';searchView.append(status);const tree=se('div');tree.dataset.searchResults='';searchView.append(tree);
  form.onsubmit=e=>{e.preventDefault();searchUI.page=0;return runContentSearch(input.value,select.value)};
@@ -116,11 +178,12 @@ function drawSearch(){
 }
 function renderSearchTree(tree,status){
  tree.replaceChildren();const active=se('section');active.className='simple-applied';active.setAttribute('aria-label',searchText('Filtros aplicados','Applied filters','Filtres appliqués'));const filterBox=se('section');filterBox.className='simple-filter-box';const filters=se('div');filters.className='search-filters';filterBox.append(se('h2',searchText('Acota las fuentes','Narrow down sources','Précisez les sources')),filters);const advanced=se('details');advanced.className='simple-advanced';advanced.open=searchUI.advanced;advanced.ontoggle=()=>searchUI.advanced=advanced.open;advanced.append(se('summary',searchText('Afinar por lectura o coincidencia','Refine by reading or match','Affiner par lecture ou correspondance')));const more=se('div');more.className='search-filters';advanced.append(more);filterBox.append(advanced);const content=se('div');tree.append(active,filterBox,content);
+ const defaultMinimum=searchData.mode?.startsWith('boolean')?'0':'1';
  const all=searchText('Todos','All','Tous'),defs=[
  ['folder',searchText('Carpeta','Folder','Dossier'),[...new Set(searchData.hits.map(h=>h.folder))].sort().map(v=>[v,v])],
  ['document',searchText('Documento','Document','Document'),[...new Set(searchData.hits.map(h=>h.document))].sort().map(v=>[v,v])],
  ['criterion',searchText('Criterio encontrado','Matched criterion','Critère trouvé'),(searchData.criteria||[]).map(c=>[String(c.id),c.label])],
- ['minimum',searchText('Mínimo de criterios en una lectura','Minimum criteria in one reading','Minimum de critères dans une lecture'),(searchData.criteria||[{}]).map((c,i)=>[String(i+1),String(i+1)])],
+ ['minimum',searchText('Mínimo de criterios en una lectura','Minimum criteria in one reading','Minimum de critères dans une lecture'),[...(defaultMinimum==='0'?[['0',searchText('Sin mínimo · permite exclusiones','No minimum · allow exclusions','Sans minimum · exclusions permises')]]:[]),...(searchData.criteria||[{}]).map((c,i)=>[String(i+1),String(i+1)])]],
  ['version',searchText('Lectura','Reading','Lecture'),[['original',sl(17)],['human',sl(18)],['second_reading',sl(19)]]],
  ['kind',searchText('Coincidencia','Match','Correspondance'),[['exact',sl(16)],['approximate',sl(15)]]]
  ];
@@ -128,10 +191,10 @@ function renderSearchTree(tree,status){
  const remove=key=>{delete searchFilterValues[key];searchUI.page=0;apply()};
  function apply(){
   active.replaceChildren(se('strong',searchText('Filtros aplicados','Applied filters','Filtres appliqués')));let applied=0;
-  for(const [key,label,options]of defs){const select=controls[key],selected=searchFilterValues[key]||(key==='minimum'?'1':'');select.replaceChildren();if(key!=='minimum'){const option=se('option',all);option.value='';select.append(option)}
+  for(const [key,label,options]of defs){const select=controls[key],selected=searchFilterValues[key]||(key==='minimum'?defaultMinimum:'');select.replaceChildren();if(key!=='minimum'){const option=se('option',all);option.value='';select.append(option)}
    for(const [value,text]of options){const compatible=searchFilterHits(searchData,{...searchFilterValues,[key]:value}).length>0;if(!compatible&&value!==selected)continue;const option=se('option',text+(compatible?'':searchText(' · sin coincidencias',' · no matches',' · sans résultat')));option.value=value;select.append(option)}
    if(selected&&![...select.options].some(o=>o.value===selected)){const option=se('option',selected+searchText(' · sin coincidencias',' · no matches',' · sans résultat'));option.value=selected;select.append(option)}select.value=selected;
-   if(selected&&(key!=='minimum'||selected!=='1')){applied++;const text=options.find(([v])=>v===selected)?.[1]||selected;const chip=searchButton(label+': '+text+' ×',()=>remove(key));chip.setAttribute('aria-label',searchText('Quitar filtro ','Remove filter ','Retirer le filtre ')+label+': '+text);active.append(chip)}
+   if(selected&&(key!=='minimum'||selected!==defaultMinimum)){applied++;const text=options.find(([v])=>v===selected)?.[1]||selected;const chip=searchButton(label+': '+text+' ×',()=>remove(key));chip.setAttribute('aria-label',searchText('Quitar filtro ','Remove filter ','Retirer le filtre ')+label+': '+text);active.append(chip)}
   }
   if(!applied)active.append(se('span',searchText('Sin filtros · todas las fuentes encontradas','No filters · all matching sources','Aucun filtre · toutes les sources trouvées')));
   const reset=searchButton(searchText('Quitar todos','Clear all','Tout effacer'),()=>{searchFilterValues={};searchUI.page=0;apply()});reset.disabled=!applied;active.append(reset);
@@ -141,6 +204,7 @@ function renderSearchTree(tree,status){
 function renderSearchTreeContent(tree,status,d){
  tree.replaceChildren();searchVisibleHits=searchSortedHits(d.hits,searchUI.sort);status.textContent=searchText(`${d.total_pages} ${d.total_pages===1?'página encontrada':'páginas encontradas'} en ${d.documents} ${d.documents===1?'documento':'documentos'} · ${d.pages_searched} páginas consultadas`,`${d.total_pages} matching ${d.total_pages===1?'page':'pages'} in ${d.documents} ${d.documents===1?'document':'documents'} · ${d.pages_searched} pages searched`,`${d.total_pages} ${d.total_pages===1?'page trouvée':'pages trouvées'} dans ${d.documents} ${d.documents===1?'document':'documents'} · ${d.pages_searched} pages consultées`);
  if(d.pages_without_text)status.textContent+=' · '+d.pages_without_text+' '+sl(11);
+ const querySummary=se('p');querySummary.className='simple-executed-query';querySummary.append(se('strong',searchText('Resultados para: ','Results for: ','Résultats pour : ')),se('span',d.query));if(d.mode?.startsWith('boolean'))querySummary.append(se('small',searchText('Condición lógica cumplida en cada lectura','Logical condition satisfied in each reading','Condition logique satisfaite dans chaque lecture')));tree.append(querySummary);
  const bar=se('div');bar.className='simple-selection-bar';const count=se('strong');count.dataset.searchSelectionCount='';count.setAttribute('role','status');bar.append(count,searchButton(searchText('Revisar mi selección →','Review my selection →','Réviser ma sélection →'),()=>showView('selection')));const sticky=tree.closest('[data-search-results]')?.querySelector('.simple-applied');sticky?.querySelector('.simple-selection-bar')?.remove();(sticky||tree).append(bar);
  const toolbar=se('div');toolbar.className='simple-results-toolbar';const modes=se('div');modes.setAttribute('role','group');modes.setAttribute('aria-label',searchText('Vista de resultados','Results view','Vue des résultats'));
  for(const [mode,label]of [['cards',searchText('▤ Fragmentos y fuentes','▤ Excerpts and sources','▤ Extraits et sources')],['map',searchText('◇ Mapa de documentos','◇ Document map','◇ Carte des documents')]]){const button=searchButton(label,()=>{searchUI.view=mode;renderSearchTreeContent(tree,status,d)});button.setAttribute('aria-pressed',String(searchUI.view===mode));modes.append(button)}
@@ -153,8 +217,8 @@ function renderSearchTreeContent(tree,status,d){
  tree.append(paginate());const cards=se('div');cards.className='simple-cards';tree.append(cards);
  for(const hit of searchVisibleHits.slice(start,start+size)){const card=se('article');card.className='simple-source-card';card.append(se('small',hit.folder));const title=se('div');title.className='simple-source-title';title.append(se('h3',hit.document.split('/').at(-1)),se('span',sl(13)+' '+hit.page));card.append(title);
   for(const match of hit.matches){const reading=se('section');reading.className='simple-reading';reading.dataset.searchReadingKey=matrixKey({...hit,version:match.version});const head=se('div');head.className='simple-reading-head';head.append(se('strong',searchVersionName(match.version)),se('small',searchReadingStatus(match)));reading.append(head);
-   const quality=se('p',sl(match.approximate?15:16)+' · '+match.criteria.length+'/'+d.criteria.length+' '+searchText('criterios en esta lectura','criteria in this reading','critères dans cette lecture'));quality.className='simple-match-quality';quality.dataset.approximate=String(match.approximate);reading.append(quality);
-   reading.append(se('p',match.criteria.map(c=>c.label+(c.approximate?' ≈':'')).join(' · ')));
+   const mixed=match.approximate&&match.criteria.some(c=>c.exact||!c.approximate),quality=se('p',(mixed?searchText('Exactas y aproximadas · revisar variantes','Exact and approximate · review variants','Exactes et approximatives · vérifier les variantes'):match.criteria.length?sl(match.approximate?15:16):searchText('Cumple la exclusión','Exclusion satisfied','Exclusion respectée'))+' · '+match.criteria.length+'/'+d.criteria.length+' '+searchText('criterios presentes en esta lectura','criteria present in this reading','critères présents dans cette lecture'));quality.className='simple-match-quality';quality.dataset.approximate=String(match.approximate);reading.append(quality);
+   reading.append(searchMatchDetails(match,d.criteria));
    if(match.excerpts.length){const preview=searchQuote(match.excerpts[0]);preview.className='simple-excerpt-preview';reading.append(preview)}
    if(match.excerpts.length>1||match.excerpts[0]?.text.length>220||(match.excerpts[0]?.text.split('\n').length||0)>5){const more=se('details');more.className='simple-excerpts';more.append(se('summary',searchText('Ver fragmentos completos','Show full excerpts','Voir les extraits complets')+' · '+match.excerpts.length));for(const excerpt of match.excerpts)more.append(searchQuote(excerpt));reading.append(more)}
    const actions=se('div');actions.className='simple-reading-actions';const verify=searchButton(searchText('Verificar fuente ↗','Check source ↗','Vérifier la source ↗'),()=>openSearchSource(hit.document,hit.page,match.version));verify.className='simple-verify';verify.setAttribute('aria-label',searchText('Verificar fuente: ','Check source: ','Vérifier la source : ')+hit.document+' · '+hit.page+' · '+searchVersionName(match.version));actions.append(verify,matrixToggle(hit,match.version));reading.append(actions);card.append(reading)
@@ -178,7 +242,7 @@ function renderSearchGraph(container,folders,status,options={}){
  function view(){camera.h=camera.w*viewport.clientHeight/Math.max(1,viewport.clientWidth);svg.setAttribute('viewBox',`${camera.x} ${camera.y} ${camera.w} ${camera.h}`)}
  function zoom(factor,cx=.5,cy=.5){const next=Math.max(380,Math.min(2400,camera.w*factor)),ratio=next/camera.w;camera.x+=camera.w*cx*(1-ratio);camera.y+=camera.h*cy*(1-ratio);camera.w=next;view()}
  function inspect(hit){inspector.replaceChildren(se('strong',hit.document+' · '+sl(13)+' '+hit.page));
-  for(const match of hit.matches){inspector.append(se('p',(match.version==='original'?sl(17):match.version==='human'?sl(18):sl(19))+' · '+sl(match.approximate?15:16)));inspector.append(se('p',match.criteria.map(c=>c.label+(c.approximate?' ≈':'')).join(' · ')));for(const excerpt of match.excerpts.slice(0,2))inspector.append(se('blockquote',excerpt.text))}
+  for(const match of hit.matches){inspector.append(se('p',(match.version==='original'?sl(17):match.version==='human'?sl(18):sl(19))+' · '+sl(match.approximate?15:16)));inspector.append(searchMatchDetails(match,graphData.criteria));for(const excerpt of match.excerpts.slice(0,2))inspector.append(searchQuote(excerpt))}
   const open=se('button',labels[5]+' →');open.type='button';open.onclick=async()=>{try{await openSource(hit.document,hit.page)}catch{status.textContent=sl(21)}};inspector.append(open);
  }
  function draw(){
@@ -278,3 +342,50 @@ const simpleWorkspaceStyle=se('style');simpleWorkspaceStyle.textContent=`
 @media(max-width:850px){#view-search .simple-cards{grid-template-columns:1fr}#view-search .simple-advanced .search-filters{grid-template-columns:repeat(2,minmax(0,1fr))}#view-search .simple-heading{align-items:start;flex-direction:column}#search-source-popup .simple-review-navigation{flex-basis:100%;justify-content:space-between}}
 @media(max-width:600px){#view-search{padding:16px}#view-search form{display:block;padding:12px}#view-search form>label{margin-bottom:12px}#view-search form>button{width:100%}#view-search .search-filters,#view-search .simple-advanced .search-filters{grid-template-columns:1fr}#view-search .simple-results-toolbar>div{width:100%;box-sizing:border-box}#view-search .simple-results-toolbar button{flex:1;padding:9px}#view-search .simple-applied{padding:10px}#view-search .simple-applied>button{max-width:100%;overflow-wrap:anywhere}#view-search .simple-source-title{flex-wrap:wrap}#search-source-popup[data-simple-review]:not([data-unified]){height:calc(100dvh - 12px);width:calc(100vw - 12px);max-height:none;padding:10px}#search-source-popup[data-simple-review]>header{gap:8px}#search-source-popup[data-simple-review]>header h2{font-size:14px}#search-source-popup[data-simple-review]>header button{font-size:11px;padding:8px}#search-source-popup[data-simple-review]>p{font-size:11px}#search-source-popup .source-popup-tools>label{gap:4px}#search-source-popup .source-popup-tools select{width:100%}#search-source-popup .simple-review-footer{gap:8px;padding-top:8px}#search-source-popup .simple-review-footer button{padding:8px;font-size:11px}#search-source-popup .simple-review-selection .matrix-select-label{font-size:11px;padding:8px}}
 `;document.head.append(simpleWorkspaceStyle);
+
+const searchLogicStyle=se('style');searchLogicStyle.textContent=`
+#view-search .simple-query-builder{margin:12px 0 16px;border:1px solid #d4dece;border-radius:9px;background:#f4f7ef;padding:13px 16px}
+#view-search .simple-query-builder>label{display:flex;flex-direction:row;align-items:center;gap:9px;font-size:12px;font-weight:600;cursor:pointer}
+#view-search .simple-query-builder input[type=checkbox]{width:16px;min-width:16px;height:16px;accent-color:#285b43}
+#view-search .simple-query-body[hidden]{display:none}
+#view-search .simple-query-body>p{font-size:12px;line-height:1.8;color:#53674c;margin:12px 0}
+#view-search .simple-query-body>small{display:block;font-size:11px;line-height:1.7;color:#63745b;margin-top:10px}
+#view-search .simple-query-chips{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px;border:1px dashed #b8cbb0;background:#fffefa;border-radius:7px;min-height:38px}
+#view-search .simple-query-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 6px 5px 10px;background:#e9f0e4;border:1px solid #c5d6bc;border-radius:6px;max-width:100%;font-size:12px;color:#28573b}
+#view-search .simple-query-chip>span{overflow-wrap:anywhere;min-width:0}
+#view-search .simple-query-chip button{border:0;background:transparent;font-size:10px;padding:4px;color:#4a6b3e}
+#view-search .simple-query-chip button:last-child{font-size:16px;line-height:1;padding:3px 5px}
+#view-search .simple-query-chip[data-kind=not]{background:#f9eae1;border-color:#e1bdab;color:#97502f}
+#view-search .simple-query-chip[data-kind=group]{font-weight:700;background:#f0eeea;border-color:#d5d1c8}
+#view-search .simple-chip-operator{width:auto;max-width:115px;min-width:0;background:#214735;color:#fffefa;border:1px solid #214735;border-radius:5px;padding:7px;font-size:11px}
+#view-search .simple-query-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+#view-search .simple-query-actions button{padding:6px 10px;font-size:11px;background:transparent;border:1px solid #c8d5c1;border-radius:5px}
+#view-search .simple-executed-query{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin:16px 0;font-size:12px;overflow-wrap:anywhere}
+#view-search .simple-executed-query>span{font-weight:600;color:#244d37}
+#view-search .simple-executed-query>small{font-size:10px;color:#4b6e42;padding:4px 8px;border-radius:5px;background:#edf4e8}
+.simple-match-terms{display:flex;flex-direction:column;gap:9px;margin:12px 0}
+.simple-term-group{display:flex;gap:5px;flex-wrap:wrap;align-items:baseline;min-width:0}
+.simple-term-group>strong{flex-basis:100%;font-size:10px;color:#3a6f43;font-weight:700}
+.simple-term-match{font-size:11px;line-height:1.6;padding:4px 7px;border:1px solid #c5d9bd;border-radius:5px;background:#edf5e7;color:#355f36;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box}
+.simple-term-group[data-kind=approximate]>strong{color:#986022}
+.simple-term-group[data-kind=approximate] .simple-term-match{background:#fff3df;border-color:#e9cd98;color:#87591e}
+.simple-term-group[data-kind=missing]>strong{color:#737a6c}
+.simple-term-group[data-kind=missing] .simple-term-match{background:#f4f4ef;border-style:dashed;border-color:#d5d8cc;color:#747b6e}
+#view-search .simple-term-group>details{margin:3px 0;padding:0 0 0 8px;font-size:11px}
+.simple-term-group details .simple-term-match{display:inline-block;margin:5px 4px 0 0}
+#search-source-popup .simple-match-terms.source-popup-reasons{position:static}
+@media(max-width:600px){#view-search .simple-query-builder{padding:12px}#view-search .simple-query-chips{padding:9px}.simple-term-match{font-size:11px}}
+`;document.head.append(searchLogicStyle);
+
+const searchWordStyle=se('style');searchWordStyle.textContent=`
+.simple-query-chip:has(.simple-word-menu){position:relative;overflow:visible}
+.simple-word-menu>summary{cursor:pointer;list-style:none;padding:5px 3px;font-weight:600;border-radius:3px}
+.simple-word-menu>summary:focus-visible{outline:2px solid #285b43;outline-offset:3px}
+.simple-word-menu[open]{position:static}
+.simple-word-choices{position:absolute;top:calc(100% + 5px);left:0;z-index:30;width:260px;max-width:calc(100vw - 90px);padding:10px;background:#fffefb;border:1px solid #bacbb3;border-radius:8px;box-shadow:0 8px 24px #20382126;display:grid;gap:5px;color:#284e37}
+.simple-word-choices>strong{font-size:11px;padding:4px}
+#view-search .simple-word-choices button{font-size:12px;text-align:left;padding:9px;border:1px solid #d8e0d2;border-radius:5px;background:#fff}
+#view-search .simple-word-choices button[aria-pressed=true]{background:#e8f1e0;border-color:#658353}
+.simple-word-choices small{display:block;font-size:10px;font-weight:400;margin-top:4px;line-height:1.5}
+.simple-query-chip[data-excluded=true]{background:#f9eae1;border-color:#e1bdab}
+`;document.head.append(searchWordStyle);

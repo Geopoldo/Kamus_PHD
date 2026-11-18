@@ -15,12 +15,14 @@ class GraphQueryTests(unittest.TestCase):
         pilot=self.root/'knowledge_graph/pilot_30';write(pilot/'latest.json',dict(run_id='20261116T120000'))
         write(pilot/'runs/20261116T120000/manifest.json',dict(status='graph',input_sha256='saved'))
 
-    def test_question_waits_for_exact_pilot_and_rejects_duplicate_worker(self):
+    def test_questions_queue_independently_for_exact_pilot(self):
         job=queries.create(self.root,dict(question='Where did the families live?',mode='local',author='Researcher'),launch=False)
         self.assertEqual(job['pilot_run'],'20261116T120000')
         self.assertEqual(job['input_sha256'],'saved')
         self.assertEqual(job['status'],'queued')
-        with self.assertRaises(ValueError):queries.create(self.root,dict(question='Another question'),launch=False)
+        other=queries.create(self.root,dict(question='Another question'),launch=False)
+        self.assertNotEqual(other['id'],job['id'])
+        self.assertEqual(other['status'],'queued')
         self.assertEqual(queries.get(self.root,job['id'])['author'],'Researcher')
         with self.assertRaises(ValueError):queries.get(self.root,'../../outside')
 

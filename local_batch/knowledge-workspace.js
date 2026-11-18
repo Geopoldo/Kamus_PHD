@@ -6,7 +6,7 @@
  const btn=(text,fn)=>{const n=el('button',text);n.type='button';n.onclick=fn;return n},sid=()=>ResearchSessions.id;
  const req=x.json,pk=r=>JSON.stringify([r.document_id,r.page,r.version||'original']);
  const terminal=s=>['complete','complete_with_errors','failed','interrupted'].includes(s);
- let current=null,kind='knowledge_graph',selected='',runs=[],busy=false,refreshing=false,epoch=0,renderStamp='',answerCleanup=null;
+ let current=null,kind='knowledge_graph',selected='',runs=[],busy=false,refreshing=false,epoch=0,renderStamp='',answerCleanup=null,publishedRun='';
  let fishStamp='',followup=null,fishLoading=false;let generating=false;let lastInspection=null;let representation='graph',manifest=null,focused=null,diagram=null,diagramDirty=false,diagramSaving=false,branch=0,auto=null,autoTimer=null,graphDrawn=false;
  const shell=el('div');shell.className='knowledge-workspace';shell.dataset.noI18n='';
  const sidebar=el('dialog');sidebar.className='kw-history-dialog';sidebar.dataset.noI18n='';document.body.append(sidebar);const center=el('div');center.className='kw-center';
@@ -24,17 +24,23 @@
  const sourceFilterHost=el('div'),rail=el('aside'),railTitle=el('h2');rail.className='kw-query-rail';rail.id='kw-query-rail';railTitle.className='kw-rail-title';
  const suggestions=el('details');suggestions.className='kw-suggestions';suggestions.append(el('summary'),x.examples);
  const statusDetails=el('details');statusDetails.className='kw-status-details';const statusSummary=el('summary');statusDetails.append(statusSummary,x.availability);
- const railToggle=btn('',()=>{if(!sources.hidden&&matchMedia('(min-width:801px) and (max-width:1250px)').matches){closeSources();shell.classList.remove('kw-rail-collapsed')}else shell.classList.toggle('kw-rail-collapsed');paintRailToggle()});railToggle.className='kw-rail-toggle';railToggle.setAttribute('aria-controls',rail.id);
+ const railToggle=btn('',()=>{if(!sources.hidden&&matchMedia('(min-width:801px) and (max-width:1550px)').matches){closeSources();shell.classList.remove('kw-rail-collapsed')}else shell.classList.toggle('kw-rail-collapsed');paintRailToggle()});railToggle.className='kw-rail-toggle';railToggle.setAttribute('aria-controls',rail.id);
  const tabbar=el('div');tabbar.className='kw-tabbar';tabbar.append(tabs,railToggle);
+ const returnGraph=btn(t('← Volver al grafo original','← Return to original graph','← Revenir au graphe initial'),()=>newQuestion(true));returnGraph.className='kw-return-graph';tabbar.prepend(returnGraph);
+ const exitFullscreen=btn(t('Salir de pantalla completa','Exit full screen','Quitter le plein écran'),async()=>{if(document.fullscreenElement===shell)await document.exitFullscreen();shell.classList.remove('graph-expanded')});exitFullscreen.className='kw-fullscreen-exit';tabbar.append(exitFullscreen);
  rail.append(railTitle,x.form,suggestions,sourceFilterHost);
  center.append(context,tabbar,pipeline,panels.answer,panels.graph,panels.fishbone,evidenceDetails,panels.inventory,panels.catalog);shell.append(tools,statusDetails,rail,center,sources);x.view.append(shell);x.view.classList.add('kw-view');
  const sourceFilters=createKnowledgeSourceFilters(sourceFilterHost,()=>{if(sourceFilters.active)x.mode.value='local';x.mode.disabled=scope.value==='selection'||sourceFilters.active;closeSources();if(['inventory','catalog'].includes(representation))choose(representation);else syncLayout()});
  sources.setAttribute('aria-label',t('Fuentes e hipótesis','Sources and hypotheses','Sources et hypothèses'));
  function closeSources(){const returnFocus=sources.contains(document.activeElement);sources.hidden=true;shell.classList.remove('kw-inspecting');lastInspection=null;paintRailToggle();if(returnFocus)tabButtons.get(representation)?.focus()}
  window.addEventListener('keydown',e=>{if(e.key==='Escape'&&!sources.hidden)closeSources()});
- function paintRailToggle(){const collapsed=shell.classList.contains('kw-rail-collapsed'),covered=!sources.hidden&&matchMedia('(min-width:801px) and (max-width:1250px)').matches;railToggle.textContent=collapsed||covered?t('Mostrar consulta','Show query','Afficher la question'):t('Ocultar consulta','Hide query','Masquer la question');railToggle.setAttribute('aria-expanded',String(!collapsed&&!covered));rail.hidden=collapsed}
- function focusQuestion(){shell.classList.remove('kw-rail-collapsed');if(matchMedia('(min-width:801px) and (max-width:1250px)').matches)closeSources();paintRailToggle();x.question.focus()}
+ function paintRailToggle(){const collapsed=shell.classList.contains('kw-rail-collapsed'),covered=!sources.hidden&&matchMedia('(min-width:801px) and (max-width:1550px)').matches;railToggle.textContent=collapsed||covered?t('Mostrar consulta','Show query','Afficher la question'):t('Ocultar consulta','Hide query','Masquer la question');railToggle.setAttribute('aria-expanded',String(!collapsed&&!covered));rail.hidden=collapsed}
+ function focusQuestion(){shell.classList.remove('kw-rail-collapsed');if(matchMedia('(min-width:801px) and (max-width:1550px)').matches)closeSources();paintRailToggle();x.question.focus()}
  window.addEventListener('resize',paintRailToggle);
+ const sharedFiltersHost=el('div');tabbar.after(sharedFiltersHost);const sharedFilters=mountKnowledgeFilters(sharedFiltersHost);
+ window.addEventListener('knowledge-filter-change',event=>{if(event.detail.origin==='graph')return;closeSources();if(['inventory','catalog'].includes(representation))choose(representation);else if(representation==='graph'){if(current){graphDrawn=false;drawGraph()}else x.drawFullGraph()}});
+ const iconPaths={graph:'M4 5L12 12L20 5M12 12L6 20M12 12L20 19M2 3h4v4H2zM10 10h4v4h-4zM18 3h4v4h-4zM4 18h4v4H4zM18 17h4v4h-4z',answer:'M3 3h18v14H8l-5 4zM7 7h10M7 11h7',fishbone:'M2 12h20M6 5l5 7-5 7M13 5l5 7-5 7',evidence:'M5 2h10l4 4v16H5zM15 2v5h4M8 11h8M8 15h8',inventory:'M12 3a4 4 0 1 0 0 8a4 4 0 0 0 0-8M4 22v-3a8 8 0 0 1 16 0v3',catalog:'M8 8l8 8M2 2h7v7H2zM15 15h7v7h-7zM13 9l6 0 0-6'};
+ function tabIcon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');svg.classList.add('kg-tab-icon');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',iconPaths[name]);path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','1.6');path.setAttribute('stroke-linejoin','round');svg.append(path);return svg}
  const tabLabels=()=>({graph:t('Grafo','Graph','Graphe'),answer:t('Respuesta','Answer','Réponse'),fishbone:t('Hipótesis','Hypotheses','Hypothèses'),evidence:t('Fuentes','Sources','Sources'),inventory:t('Entidades','Entities','Entités'),catalog:t('Relaciones','Relationships','Relations')});
  const tabButtons=new Map();
  for(const name of ['graph','answer','fishbone','evidence','inventory','catalog']){const b=btn('',()=>choose(name));b.id='kw-tab-'+name;b.dataset.tab=name;b.setAttribute('role','tab');b.setAttribute('aria-controls','kw-panel-'+name);tabButtons.set(name,b);tabs.append(b);panels[name].id='kw-panel-'+name;panels[name].setAttribute('role','tabpanel');panels[name].setAttribute('aria-labelledby',b.id);panels[name].tabIndex=0}
@@ -72,13 +78,13 @@
   const old=scope.value;scope.replaceChildren();for(const [value,label]of [['pilot',t('Knowledge Graph · versión publicada','Knowledge Graph · published version','Knowledge Graph · version publiée')],['selection',t('Mi selección · lecturas de esta sesión','My selection · this session’s readings','Ma sélection · lectures de cette session')]]){const o=el('option',label);o.value=value;scope.append(o)}scope.value=old||'pilot';scopeLabel.firstChild!==scope&&scopeLabel.firstChild.remove();scopeLabel.prepend(document.createTextNode(t('Dónde buscar respuestas','Where to find answers','Où chercher les réponses')));
   advanced.querySelector('summary').textContent=t('Método, responsable y alcance','Method, author and scope','Méthode, responsable et portée');
   if(sourceFilters.active)x.mode.value='local';x.mode.disabled=scope.value==='selection'||sourceFilters.active;sourceFilters.setEnabled(scope.value==='pilot');sourceFilters.setLocked(!!current);gSet(x.send,t('Preguntar y analizar →','Ask and analyze →','Interroger et analyser →'));drawSelectionCount();
-  toolbar.replaceChildren(btn(t('Grafo completo','Full graph','Graphe complet'),()=>newQuestion(true)),btn(t('Historial de preguntas','Question history','Historique des questions'),()=>sidebar.showModal()),btn(t('Mi selección','My selection','Ma sélection'),()=>showView('selection')));
+  toolbar.replaceChildren(btn(t('← Grafo original','← Original graph','← Graphe initial'),()=>newQuestion(true)),btn(t('Historial de preguntas','Question history','Historique des questions'),()=>sidebar.showModal()),btn(t('Mi selección','My selection','Ma sélection'),()=>showView('selection')));
   toolbar.prepend(btn(t('Nueva pregunta','New question','Nouvelle question'),()=>newQuestion()));
   historyClose.setAttribute('aria-label',t('Cerrar historial','Close history','Fermer l’historique'));
   railTitle.textContent=t('Pregunta al archivo','Ask the archive','Interroger les archives');rail.setAttribute('aria-label',railTitle.textContent);
   suggestions.querySelector('summary').textContent=t('Ideas para comenzar','Ideas to get started','Idées pour commencer');
   tabs.setAttribute('aria-label',t('Vistas de la investigación','Research views','Vues de recherche'));
-  for(const [name,b]of tabButtons)b.textContent=tabLabels()[name];
+  for(const [name,b]of tabButtons)b.replaceChildren(tabIcon(name),document.createTextNode(tabLabels()[name]));sharedFilters.paint();
   if(!statusSummary.textContent)statusSummary.textContent=t('Conectando con el archivo…','Connecting to the archive…','Connexion aux archives…');
   paintRailToggle();
   let note=x.form.querySelector('.kw-auto-note');if(!note){note=el('p');note.className='kw-auto-note';x.form.append(note)}note.textContent=t('Respuesta + relaciones + espina automática, con fuentes y procesamiento local.','Answer + relationships + automatic fishbone, with sources and local processing.','Réponse + relations + diagramme automatique, avec sources et traitement local.');
@@ -92,13 +98,21 @@
   // Keep large catalogs out of the live DOM while retaining their filters and rows.
   for(const name of ['inventory','catalog']){if(name===representation)center.append(panels[name]);else panels[name].remove()}
   evidenceDetails.hidden=representation!=='evidence';
-  shell.dataset.representation=representation;
-  x.fullGraph.hidden=!!current;graphResult.hidden=!current;
-  if(!current&&representation==='graph')x.drawFullGraph();
+  shell.dataset.representation=representation;returnGraph.hidden=!current;returnGraph.textContent=t('← Volver al grafo original','← Return to original graph','← Revenir au graphe initial');
+  const hasQueryGraph=!!current;
+  x.fullGraph.hidden=hasQueryGraph;graphResult.hidden=!current;
+  if(!hasQueryGraph&&representation==='graph')x.drawFullGraph();
  }
  function choose(name){
   if(!tabButtons.has(name)||(!current&&['answer','fishbone','evidence'].includes(name)))return;
   representation=name;syncLayout();center.scrollTop=0;persistView();
+  if(current&&['inventory','catalog'].includes(name)){
+   const host=panels[name],graph=KnowledgeGraphFilters.filter(filteredGraph());host.replaceChildren(el('h3',name==='inventory'?t('Entidades de esta pregunta','Entities for this question','Entités de cette question'):t('Relaciones de esta pregunta','Relationships for this question','Relations de cette question')),el('p',contextQuestion()));
+   const names=new Map(graph.nodes.map(n=>[n.id,n.label]));
+   const items=name==='inventory'?graph.nodes:graph.relationships;
+   if(!items.length)host.append(el('p',t('No se recuperaron elementos para esta pregunta con los filtros actuales.','No items retrieved for this question with the current filters.','Aucun élément retrouvé pour cette question avec les filtres actuels.')));
+   for(const item of items){const row=el('article');row.className='kw-query-scope-row';row.append(el('strong',name==='inventory'?item.label:(names.get(item.source)||item.source)+' → '+(names.get(item.target)||item.target)),el('p',name==='inventory'?(item.description||item.type||''):(item.fields?.relation||item.description||'')));const pages=name==='inventory'?(item.mentions||[]).map(m=>m.page):[item.page];const seen=new Set();for(const page of pages){if(!page||seen.has(pk(page)))continue;seen.add(pk(page));row.append(btn(page.document+' · p. '+page.page,()=>openSource(page)))}host.append(row)}return;
+  }
   if(['inventory','catalog'].includes(name)){
    if(name==='inventory'&&!panels.inventory.children.length)panels.inventory.append(el('p',t('Cargando entidades…','Loading entities…','Chargement des entités…')));
    if(name==='catalog')graphPilotRefresh(true).catch(e=>message(e.message));
@@ -106,21 +120,28 @@
   }
   if(name==='fishbone')drawFishbone();if(name==='graph'&&current)drawGraph();if(name==='evidence')drawEvidence();
  }
- function newQuestion(full=false){if(full)sourceFilters.set({});epoch++;representation='graph';fishStamp='';followup=null;selected='';current=null;manifest=null;focused=null;diagram=null;diagramDirty=false;auto=null;clearTimeout(autoTimer);closeSources();renderStamp='';graphDrawn=false;answerCleanup?.();answerCleanup=null;panels.answer.replaceChildren();graphResult.replaceChildren();x.question.value='';x.progress.update(null);paintControls();syncLayout();persistView();if(!full)focusQuestion()}
+ function newQuestion(full=false){if(full)sourceFilters.setLocked(false);if(full)KnowledgeGraphFilters.clear('graph');if(full)sourceFilters.set({});epoch++;representation='graph';fishStamp='';followup=null;selected='';current=null;manifest=null;focused=null;diagram=null;diagramDirty=false;auto=null;clearTimeout(autoTimer);closeSources();renderStamp='';graphDrawn=false;answerCleanup?.();answerCleanup=null;panels.answer.replaceChildren();graphResult.replaceChildren();x.question.value='';x.progress.update(null);paintControls();syncLayout();persistView();if(!full)focusQuestion()}
+ const hiddenHistoryKey=()=> 'maph-hidden-knowledge-history:'+(sid()||'unassigned');
+ function hiddenHistory(){try{return new Set(JSON.parse(localStorage.getItem(hiddenHistoryKey())||'[]'))}catch{return new Set()}}
+ function setHistoryHidden(key,hidden){const items=hiddenHistory();if(hidden)items.add(key);else items.delete(key);localStorage.setItem(hiddenHistoryKey(),JSON.stringify([...items]));drawHistory()}
  function drawHistory(){
   history.replaceChildren(el('h3',t('Preguntas de esta sesión','Questions in this session','Questions de cette session')));
-  if(!runs.length)history.append(el('p',t('Tus preguntas aparecerán aquí.','Your questions will appear here.','Vos questions apparaîtront ici.')));
-  for(const r of runs){const b=btn(r.question||r.questions?.join(' · ')||t('Pregunta guardada','Saved question','Question enregistrée'),()=>{sidebar.close();open(r.kind,r.id)});b.className='kw-history-item';b.setAttribute('aria-pressed',String(r.id===selected&&r.kind===kind));b.append(el('small',(r.kind==='matrix'?t('Selección','Selection','Sélection'):'Knowledge Graph')+' · '+statusName(r.status)));history.append(b)}
+  const hidden=hiddenHistory(),visible=runs.filter(r=>!hidden.has(r.kind+':'+r.id));
+  if(!visible.length)history.append(el('p',t('Tus preguntas aparecerán aquí.','Your questions will appear here.','Vos questions apparaîtront ici.')));
+  for(const r of visible){const b=btn(r.question||r.questions?.join(' · ')||t('Pregunta guardada','Saved question','Question enregistrée'),()=>{sidebar.close();open(r.kind,r.id)});b.className='kw-history-item';b.setAttribute('aria-pressed',String(r.id===selected&&r.kind===kind));b.append(el('small',(r.kind==='matrix'?t('Selección','Selection','Sélection'):'Knowledge Graph')+' · '+statusName(r.status)));const row=el('div');row.className='kw-history-row';row.append(b);if(r.kind==='knowledge_graph'){const remove=btn(t('🗑 Quitar del historial','🗑 Remove from history','🗑 Retirer de l’historique'),()=>{const key=r.kind+':'+r.id;setHistoryHidden(key,true);if(selected===r.id&&kind===r.kind)newQuestion(true);const undo=el('p',t('Pregunta retirada de tu historial. ','Question removed from your history. ','Question retirée de votre historique. '));undo.setAttribute('role','status');undo.append(btn(t('Deshacer','Undo','Annuler'),()=>{setHistoryHidden(key,false)}));history.prepend(undo)});remove.className='kw-history-remove';remove.setAttribute('aria-label',t('Quitar del historial: ','Remove from history: ','Retirer de l’historique : ')+(r.question||r.id));row.append(remove)}history.append(row)}
+  if(hidden.size){const restore=btn(t('Restaurar preguntas retiradas','Restore removed questions','Restaurer les questions retirées'),()=>{localStorage.removeItem(hiddenHistoryKey());drawHistory()});history.append(restore)}
  }
  async function refresh(){
   if(refreshing)return;refreshing=true;const sessionId=sid(),turn=epoch;
   try{
    const [status,all,matrices]=await Promise.all([req('/knowledge-graph/status'),req('/knowledge-graph/questions'),sid()?req('/research-sessions/jobs?id='+sid()):Promise.resolve([])]);
    if(sessionId!==sid()||turn!==epoch)return;
+   if(publishedRun!==status.available_run){publishedRun=status.available_run;if(!current&&representation==='graph')x.drawFullGraph();else if(['inventory','catalog'].includes(representation))choose(representation)}
    runs=[...all.filter(r=>(r.session_id||null)===sessionId).map(r=>({...r,kind:'knowledge_graph'})),...matrices.filter(r=>r.kind==='matrix'&&r.questions?.length===1)].sort((a,b)=>b.created-a.created);
-   drawHistory();const available=status.available_pages||0,building=['starting','graph','embeddings','query'].includes(status.status);
+   drawHistory();const available=status.available_pages||0,building=status.control?.status==='running'||(!status.control?.status&&['starting','graph','embeddings','query'].includes(status.status));
+   let scopeNote=x.form.querySelector('.kw-index-scope');if(!scopeNote){scopeNote=el('p');scopeNote.className='kw-index-scope';x.form.prepend(scopeNote)}scopeNote.textContent=available!==status.indexed_pages?t(`Grafo visible: ${available} páginas. Preguntas GraphRAG: ${status.indexed_pages} páginas del último índice completo. Puedes preguntar a las nuevas páginas desde Mi selección.`,`Visible graph: ${available} pages. GraphRAG questions: ${status.indexed_pages} pages in the last complete index. Query new pages from My selection.`,`Graphe visible : ${available} pages. Questions GraphRAG : ${status.indexed_pages} pages du dernier index complet. Interrogez les nouvelles pages depuis Ma sélection.`):'';
    x.availability.textContent=status.result_ready?t(`Grafo disponible: ${available} páginas. Las correcciones posteriores no reconstruyen esta versión automáticamente.`,`Available graph: ${available} pages. Later corrections do not automatically rebuild this version.`,`Graphe disponible : ${available} pages. Les corrections ultérieures ne reconstruisent pas automatiquement cette version.`):t('El grafo aún no está disponible. Consulta su proceso en Resumen.','The graph is not available yet. Check its process in Overview.','Le graphe n’est pas encore disponible. Consultez son état dans le résumé.');
-   if(building)x.availability.textContent+=' '+t(`Ampliación en curso a ${status.manifest?.total||0} páginas. Puedes explorar la versión publicada; las preguntas con IA comparten la GPU y pueden tener que esperar.`,`Expansion to ${status.manifest?.total||0} pages is in progress. You can explore the published version; AI questions share the GPU and may need to wait.`,`Extension à ${status.manifest?.total||0} pages en cours. Vous pouvez explorer la version publiée ; les questions IA partagent le GPU et peuvent devoir attendre.`);
+   if(building)x.availability.textContent+=' '+t(`Ampliación en curso a ${status.manifest?.total||0} páginas. Puedes explorar la versión publicada; las preguntas con IA tienen prioridad y pausan automáticamente la construcción.`,`Expansion to ${status.manifest?.total||0} pages is in progress. You can explore the published version; AI questions take priority and automatically pause the build.`,`Extension à ${status.manifest?.total||0} pages en cours. Vous pouvez explorer la version publiée ; les questions IA sont prioritaires et suspendent automatiquement la construction.`);
    if(status.source_changes?.archived_pages)x.availability.textContent+=' '+t(`Atención: esta versión aún contiene ${status.source_changes.archived_pages} páginas de fuentes retiradas. Las búsquedas normales ya las excluyen; Knowledge Graph necesita reconstruirse para excluirlas.`,`Warning: this version still contains ${status.source_changes.archived_pages} pages from archived sources. Regular searches already exclude them; Knowledge Graph must be rebuilt to exclude them.`,`Attention : cette version contient encore ${status.source_changes.archived_pages} pages de sources retirées. Les recherches ordinaires les excluent déjà ; Knowledge Graph doit être reconstruit pour les exclure.`);
    statusSummary.textContent=(status.result_ready?t(`Grafo disponible · ${available} páginas`,`Graph available · ${available} pages`,`Graphe disponible · ${available} pages`):t('Grafo en preparación','Graph in preparation','Graphe en préparation'))+(building?t(' · Ampliación en curso',' · Expansion in progress',' · Extension en cours'):'')+(status.source_changes?.archived_pages?t(' · Fuentes retiradas: ver detalle',' · Archived sources: view details',' · Sources retirées : voir le détail'):'');
    statusDetails.dataset.state=status.source_changes?.archived_pages?'warning':status.result_ready?'ready':'pending';
@@ -137,12 +158,13 @@
   if(turn!==epoch||selected!==id||kind!==k)return;
   if((value.session_id||null)!==sid())throw Error(t('La pregunta pertenece a otra sesión.','The question belongs to another session.','La question appartient à une autre session.'));
   if(current?.id!==value.id){sourceFilters.set(value.source_filters);sourceFilters.setLocked(true)}
-  current=value;const stamp=JSON.stringify([id,value.status,value.updated,value.completed,value.provenance_version]);if(stamp!==renderStamp){renderStamp=stamp;renderAnswer();caption();drawGraph();drawFishbone()}
+  const becameComplete=current?.status!=='complete'&&value.status==='complete';current=value;const stamp=JSON.stringify([id,value.status,value.updated,value.completed,value.provenance_version]);if(stamp!==renderStamp){renderStamp=stamp;renderAnswer();caption();drawGraph();drawFishbone()}
   if(k==='knowledge_graph')x.progress.update(value);else x.progress.update(null);
   if(terminal(value.status)&&!['failed','interrupted'].includes(value.status)&&!manifest){
    try{const m=await req(evidenceURL());if(turn!==epoch)return;manifest=m;caption();drawEvidence()}
    catch(e){message(e.message)}
   }
+  if(becameComplete&&k==='knowledge_graph'){representation='graph';graphDrawn=false;drawGraph();persistView()}
   syncLayout();paintPipeline();if(terminal(value.status)&&manifest)await refreshDiagram(turn);
  }
  x.form.onsubmit=async event=>{
@@ -152,7 +174,7 @@
    if(!await ResearchSessions.flush()||sessionId!==sid())return;
    if(matrix&&(!sid()||!matrixSelection.size))throw Error(t('Crea una sesión y selecciona lecturas antes de consultar esta opción.','Create a session and select readings first.','Créez une session et sélectionnez des lectures.'));
    const common={session_id:sessionId,author:x.author.value||ResearchSessions.current?.researcher||'',auto_fishbone:true,language:uiLanguage};
-   const payload=matrix?{...common,questions:[text],records:[...matrixSelection.values()].map(({document_id,page,version})=>({document_id,page,version}))}:{...common,question:text,mode:x.mode.value,source_filters:sourceFilters.get(),pilot_run:sourceFilters.run};
+   const payload=matrix?{...common,questions:[text],records:[...matrixSelection.values()].map(({document_id,page,version})=>({document_id,page,version}))}:{...common,question:text,mode:x.mode.value,source_filters:sourceFilters.get(),pilot_run:sourceFilters.queryRun};
    message(t('Guardando pregunta y preparando el análisis…','Saving question and preparing the analysis…','Enregistrement de la question et préparation de l’analyse…'));
    const value=await req(matrix?'/matrix':'/knowledge-graph/questions',payload);if(sessionId!==sid())return;
    ResearchSessions.log(matrix?'session_question':'knowledge_graph',text,{job_id:value.id,scope:scope.value,mode:matrix?'per_reading':x.mode.value,pilot_run:value.pilot_run,source_filters:matrix?null:sourceFilters.get(),auto_fishbone:true});
@@ -178,8 +200,8 @@
   if(graphDrawn)return;graphDrawn=true;graphResult.replaceChildren();if(!current)return;graphResult.append(el('h3',t('Relaciones recuperadas','Retrieved relationships','Relations retrouvées')));
   if(kind==='matrix'){graphResult.append(el('p',t('Esta consulta examina las lecturas de la sesión una por una. Sus respuestas y su espina tienen fuentes; no se construyó un grafo nuevo con estas lecturas.','This query examines saved readings one by one. Its answers and fishbone have sources; no new graph was built from these readings.','Cette question examine les lectures enregistrées une par une. Les réponses et le diagramme ont des sources ; aucun nouveau graphe n’a été construit.')),btn(t('Ver las evidencias de la selección','View selection evidence','Voir les preuves de la sélection'),()=>choose('evidence')));return}
   const graph=filteredGraph();if(focused)graphResult.append(btn(t('Quitar enfoque de la espina','Clear fishbone focus','Effacer le focus du diagramme'),()=>{focused=null;graphDrawn=false;drawGraph();drawEvidence()}));
-  if(!graph.nodes.length){graphResult.append(el('p',t('No hay relaciones representables en este contexto.','No representable relationships in this context.','Aucune relation représentable dans ce contexte.')));return}
-  graphQueryOverview(graphResult,{...graph,run_id:current.pilot_run},{question:contextQuestion(),filtered:!!focused,onInspect:inspect,onClear:closeSources,externalInspector:true});
+  if(!graph.nodes.length){graphResult.append(el('p',t('Esta pregunta no tiene relaciones recuperadas. Puedes explorar el grafo completo con el botón siguiente.','This question has no retrieved relationships. Use the button below to explore the full graph.','Cette question ne contient aucune relation retrouvée. Le graphe publié reste disponible ci-dessus.')),btn(t('Volver al grafo completo','Return to full graph','Revenir au graphe complet'),()=>newQuestion(true)));return}
+  graphQueryOverview(graphResult,KnowledgeGraphFilters.filter({...graph,run_id:current.pilot_run}),{question:contextQuestion(),filtered:!!focused,onInspect:inspect,onClear:closeSources,externalInspector:true});
  }
  async function openSource(page,quote=''){
   if(kind==='matrix'&&current){const row=current.rows.find(r=>pk(r)===pk(page));if(row){await matrixSource(row,quote,t('Consulta de la sesión','Session question','Question de la session'));return}}
@@ -428,12 +450,19 @@
 .kw-dialog-close{float:right;border-radius:50%;font-size:22px;width:35px;height:35px;display:grid;place-items:center;padding:0}
 .kw-history{clear:both}.kw-history h3{font-size:22px;font-weight:500}
 .kw-history-item{display:block;width:100%;text-align:left;padding:16px;margin:10px 0;line-height:1.7;border-radius:8px;white-space:normal;font-size:13px}
+.kw-history-row{display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:10px;align-items:center;border-bottom:1px solid #dce3d8;padding:8px 0}.kw-history-row .kw-history-item{margin:0}.kw-history-remove{display:block!important;visibility:visible!important;background:#fff2eb;color:#893e29;border:1px solid #d9b3a3;border-radius:7px;padding:10px;font-size:12px;cursor:pointer;white-space:normal}@media(max-width:500px){.kw-history-row{grid-template-columns:1fr}.kw-history-remove{justify-self:end}}
 .kw-history-item small{display:block;font-size:11px;color:#6d8070;margin-top:7px}
 .kw-history-item[aria-pressed=true]{background:#173e35;color:#fff}.kw-history-item[aria-pressed=true] small{color:#bfd8ca}
 .knowledge-workspace .kw-evidence-details{margin:0;padding:0;border:0}
 .knowledge-workspace .graph-entity-inventory{padding:0}
 .knowledge-workspace .graph-pilot{padding:0}
 @keyframes kw-panel-in{from{opacity:.5;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+@media(min-width:801px) and (max-width:1550px){
+ .kw-inspecting{grid-template-columns:minmax(0,1fr) 300px}
+ .kw-inspecting .kw-query-rail{display:none}
+ .kw-inspecting .kw-center{grid-column:1}
+ .kw-inspecting .kw-sources{grid-column:2}
+}
 @media(max-width:1250px){
  .knowledge-workspace{grid-template-columns:250px minmax(0,1fr)}
  .kw-inspecting{grid-template-columns:minmax(0,1fr) 300px}
@@ -468,5 +497,33 @@
  .kw-bone-question strong{font-size:16px}.kw-panel .graph-query-answer{padding:16px;font-size:13px}
  .kw-evidence-list{grid-template-columns:1fr}
 }
+.kw-fullscreen-exit{display:none}.knowledge-workspace:fullscreen,.knowledge-workspace.graph-expanded{box-sizing:border-box;background:#fffefa;color:#173f34;width:100%;height:100dvh;overflow:auto;padding:18px;position:fixed;inset:0;z-index:800}.knowledge-workspace:fullscreen .kw-fullscreen-exit,.knowledge-workspace.graph-expanded .kw-fullscreen-exit{display:block}.knowledge-workspace:fullscreen .kw-tabbar,.knowledge-workspace.graph-expanded .kw-tabbar{position:sticky;top:0;background:#fffefa;z-index:20;flex-wrap:wrap}.knowledge-workspace:fullscreen .graph-query-svg,.knowledge-workspace.graph-expanded .graph-query-svg{height:70dvh!important}.knowledge-workspace:fullscreen .kw-sources,.knowledge-workspace.graph-expanded .kw-sources{z-index:900}
+
+/* Fullscreen rows must size to content rather than stretching across the viewport. */
+.knowledge-workspace:is(:fullscreen,.graph-expanded){grid-template-rows:auto auto minmax(0,1fr);align-content:start;align-items:start;overflow:hidden;padding:8px;--kw-pane-height:100%;gap:0}
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-session-toolbar{padding:6px 12px;min-height:0;gap:12px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-session>small:first-child{display:none}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-session>strong{font-size:18px;letter-spacing:0}
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-status-details{padding:0 12px;min-height:0;align-self:start}
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-status-details>summary{padding:4px 0}
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-center{height:100%;max-height:none;min-height:0;align-self:stretch;overflow:auto;padding:0 10px 8px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-query-rail{min-height:0;max-height:100%;overflow:auto}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-context{display:none}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-tabbar{padding:4px 0;margin:0;min-height:0}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-full-hero{padding:6px 12px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-full-metrics strong{font-size:20px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-full-metrics{gap:8px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-query-overview{margin:0;padding:8px 12px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-query-svg{height:calc(100dvh - 390px)!important;min-height:260px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-panel .graph-canvas-controls{margin-top:0}
+/* Fill the remaining workspace height through every graph wrapper, including WebGL. */
+.knowledge-workspace:is(:fullscreen,.graph-expanded)>.kw-center{display:flex;flex-direction:column}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-panel[data-representation=graph]:not([hidden]){flex:1;min-height:0;display:flex;flex-direction:column}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-panel[data-representation=graph]>div:not([hidden]){flex:1;min-height:0;display:flex;flex-direction:column}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-full-pilot>.graph-query-overview,.knowledge-workspace:is(:fullscreen,.graph-expanded) .kw-panel[data-representation=graph] .graph-query-overview{flex:1;min-height:0;display:flex;flex-direction:column}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-canvas-stage{flex:1;min-height:260px;position:relative}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-webgl{position:absolute!important;inset:0;width:100%!important;height:100%!important;min-height:0!important}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-query-svg{height:100%!important;min-height:260px}
+.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-full-hero,.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-canvas-controls,.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-type-legend,.knowledge-workspace:is(:fullscreen,.graph-expanded) .graph-visual-guide{flex-shrink:0}
 @media(prefers-reduced-motion:reduce){.knowledge-workspace *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 `;document.head.append(style)})();

@@ -26,3 +26,31 @@ assert.equal(context.searchSortedHits(filtered,'document')[0].document,'A/one.pd
 assert.equal(context.searchUnicodeSlice('😀 Hannah Bay',2,8),'Hannah','Python code-point offsets preserve highlights after emoji');
 assert.equal(JSON.stringify(data),before,'Filtering and ordering do not mutate saved result or evidence');
 console.log('Simple search: same-reading filters, source dependencies, exact/approximate scope, ordering, immutable evidence and Unicode highlighting passed.');
+
+vm.runInContext(source.slice(source.indexOf('function searchChipTokens('),source.indexOf('function searchMatchDetails(')),context);
+const chipTokens=q=>Array.from(context.searchChipTokens(q));
+assert.deepEqual(chipTokens('alpha beta'),['alpha','AND','beta']);
+assert.deepEqual(chipTokens('(alpha OR beta) NOT gamma'),['(','alpha','OR','beta',')','AND','NOT','gamma']);
+assert.deepEqual(chipTokens('"Rene Brunet" AND NOT "AND"'),['"Rene Brunet"','AND','NOT','"AND"']);
+assert.deepEqual(chipTokens('"unfinished name'),['"unfinished name'],'Keep unfinished quoted input visible for correction');
+assert.deepEqual(Array.from(context.searchRemoveChip(['alpha','AND','NOT','beta','OR','gamma'],3)),['alpha','OR','gamma'],'Deleting an excluded term removes its NOT and connector');
+assert.deepEqual(Array.from(context.searchRemoveChip(['NOT','alpha','AND','beta'],1)),['beta']);
+assert.deepEqual(Array.from(context.searchRemoveChip(['alpha','OR','beta'],2)),['alpha']);
+const negative={mode:'boolean',hits:[{document:'x',folder:'A',page:1,matches:[{version:'original',criteria:[],query_matches:true}]}]};
+assert.equal(context.searchFilterHits(negative,{}).length,1,'A NOT-only match remains visible with zero positive criteria');
+assert.equal(context.searchFilterHits(negative,{minimum:'1'}).length,0);
+assert.equal(context.searchFilterHits(negative,{minimum:'0'}).length,1);
+negative.hits[0].matches[0].query_matches=false;
+assert.equal(context.searchFilterHits(negative,{}).length,0,'Non-matching source snapshots do not leak into results');
+console.log('Boolean chips: grouping, implicit AND, quoted operators, exclusion removal and absence-result filters passed.');
+
+context.se=(tag,text='')=>({tag,textContent:text,dataset:{},children:[],append(...children){this.children.push(...children)}});
+context.searchText=es=>es;
+vm.runInContext(source.slice(source.indexOf('function searchMatchDetails('),source.indexOf('function searchQuote(')),context);
+const details=context.searchMatchDetails({criteria:[{criterion:0,label:'Brunet',variants:[{text:'BRUNET',count:2,approximate:false},{text:'Brunett',count:1,approximate:true}]}]},[{id:0,label:'Brunet'},{id:1,label:'Quebec'}]);
+assert.deepEqual(Array.from(details.children,g=>g.dataset.kind),['exact','approximate','missing']);
+assert.equal(details.children[0].children[1].textContent,'Brunet → “BRUNET” ×2');
+assert.equal(details.children[1].children[1].textContent,'Brunet → “Brunett”');
+assert.equal(details.children[2].children[1].textContent,'Quebec');
+assert.equal(context.searchMatchDetails({criteria:[{criterion:0,label:'name',variants:[{text:'<img onerror=alert(1)>',approximate:false}]}]},[]).children[0].children[1].textContent,'name → “<img onerror=alert(1)>”','Literal evidence stays in text content');
+console.log('Match details: literal spellings, counts, exact/approximate separation, missing terms and text-only rendering passed.');

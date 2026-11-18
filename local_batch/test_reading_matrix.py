@@ -20,6 +20,9 @@ class MatrixTests(unittest.TestCase):
             records=[dict(document_id=ident,page=1,version=v) for v in ('original','human')]
             job=matrix.create(root,dict(records=records,questions=['When did René meet the council?']),launch=False)
             self.assertEqual(job['total'],2)
+            other=matrix.create(root,dict(records=records,questions=['What happened?']),launch=False)
+            self.assertNotEqual(other['id'],job['id'])
+            self.assertEqual(matrix.get(root,job['id'])['status'],'queued')
             self.assertEqual([r['review_status'] for r in job['rows']],['unreviewed','validated'])
             (out/'page_0001.md').write_text('Changed later')
             saved=matrix.get(root,job['id'])

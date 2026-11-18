@@ -151,8 +151,8 @@ class LocalEngine(Engine):
             try:
                 fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB); break
             except BlockingIOError:
-                if time.monotonic()-waited > 600:
-                    raise RuntimeError('Shared GPU lock busy for 10 minutes')
+                if time.monotonic()-waited > 3600:
+                    raise RuntimeError('Shared GPU lock busy for one hour')
                 time.sleep(3)
         self.manifest['wait_seconds'] = time.monotonic()-waited
         self.reserve = max(1536, index.read(index.HERE / 'inference_policy.json')['minimum_vram_reserve_mib'])
@@ -308,6 +308,10 @@ async def run():
     GraphExtractor._process_document = structured_process
     async def audited_extract(self, text, entity_types, source_id):
         result = await original(self, text, entity_types, source_id)
+        # GraphRAG catches extraction exceptions and returns empty dataframes.
+        # Preserve genuine empty successes, but never publish a failed call as done.
+        if any(e.get('text_sha256') == index.digest(text) for e in manifest.get('extraction_errors', [])):
+            return result
         with (run_dir / 'extractions.jsonl').open('a') as out:
             out.write(json.dumps(dict(source_id=source_id, entities=result[0].to_dict('records'), relationships=result[1].to_dict('records')), ensure_ascii=False)+'\n')
         manifest['extracted_chunks'] = manifest.get('extracted_chunks', 0)+1; checkpoint()

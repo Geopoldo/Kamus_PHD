@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const {filter,empty}=require('./knowledge-graph-filters');
+const p={document_id:'d',document:'f/d.pdf',page:1,version:'original'},q={...p,page:2};
+const nodes=[['a','PERSON'],['b','PLACE'],['c','FAMILY'],['d','PERSON']].map(([id,type])=>({id,label:id,type,mentions:[{page:id==='d'?q:p}]}));
+const relationships=[{id:'ab',source:'a',target:'b',source_type:'PERSON',target_type:'PLACE',fields:{relation:'lives'},page:p},{id:'bc',source:'b',target:'c',source_type:'PLACE',target_type:'FAMILY',fields:{relation:'visits'},page:p}];
+const graph={nodes,relationships,selection:[p,q]};
+assert.equal(filter(graph,empty()),graph);
+assert.deepEqual(filter(graph,{entity:'a'}).nodes.map(n=>n.id),['a','b']);
+assert.deepEqual(filter(graph,{entity:'a'}).relationships.map(e=>e.id),['ab']);
+assert.deepEqual(filter(graph,{edges:['bc']}).nodes.map(n=>n.id),['b','c']);
+assert.deepEqual(filter(graph,{type:'PERSON'}).nodes.map(n=>n.id),['a','b','d']);
+assert.deepEqual(filter(graph,{relation:'vis'}).relationships.map(e=>e.id),['bc']);
+assert.equal(filter(graph,{query:'missing'}).nodes.length,0);
+assert.equal(filter(graph,{edges:['absent']}).nodes.length,0);
+assert.equal(graph.nodes.length,4);assert.equal(graph.relationships.length,2);
+console.log('Shared graph filters: selection, relations, types, empty results and immutable evidence passed');

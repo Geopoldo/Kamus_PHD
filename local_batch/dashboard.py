@@ -8,6 +8,7 @@ import research_workspace
 import hypotheses
 import hypotheses_auto
 import place_geography
+import graphrag_control
 import graphrag_review
 import graphrag_queries
 import review,issues,triage,content_search,reading_matrix,priority_search,priority_catalog,priority_audit,sources,selections,embeddings,process_telemetry
@@ -43,7 +44,7 @@ class Handler(BaseHTTPRequestHandler):
    except OSError:self.reply({'error':'No se pudo guardar la fuente. Consulta el registro local.'},500)
    return
   if self.headers.get('Content-Type')!='application/json':self.reply({'error':'Forbidden'},403);return
-  if self.path not in ('/review','/issues','/triage','/matrix','/matrix/retry','/priorities-run','/priorities-catalog','/sources/start','/sources/archive','/sources/restore','/selections','/embeddings/start','/place-geography','/knowledge-graph/questions','/hypotheses','/hypotheses/auto','/research-sessions'):self.send_error(404);return
+  if self.path not in ('/review','/issues','/triage','/matrix','/matrix/retry','/priorities-run','/priorities-catalog','/sources/start','/sources/archive','/sources/restore','/selections','/embeddings/start','/place-geography','/knowledge-graph/questions','/knowledge-graph/control','/hypotheses','/hypotheses/auto','/research-sessions'):self.send_error(404);return
   try:
    length=int(self.headers.get('Content-Length','0'))
    if not 0<length<=(5*1024*1024 if self.path in ('/selections','/research-sessions') else 1000000):raise ValueError('Invalid length')
@@ -55,6 +56,7 @@ class Handler(BaseHTTPRequestHandler):
     session_id=research_sessions.validate_link(ROOT,payload.get('session_id'));base=ROOT/'research_sessions'/session_id if session_id else ROOT
     if payload.get('query_id'):self.reply(research_workspace.save_diagram(ROOT,payload));return
     self.reply(hypotheses.save(base,payload));return
+   if self.path=='/knowledge-graph/control':self.reply(graphrag_control.request(ROOT,payload));return
    if self.path=='/knowledge-graph/questions':self.reply(graphrag_queries.create(ROOT,payload));return
    if self.path=='/matrix/retry':self.reply(reading_matrix.retry(ROOT,payload));return
    if self.path=='/place-geography':self.reply(place_geography.save(ROOT,payload));return
@@ -178,7 +180,9 @@ class Handler(BaseHTTPRequestHandler):
    try:self.reply(priority_search.get(ROOT))
    except (OSError,ValueError,KeyError) as e:self.reply({'error':str(e)},400)
    return
-  if route.path in ('/priority-search.js','/priority-balance-core.js','/priority-balance.js','/priority-catalog-editor.js','/sources-ui.js','/research-selection.js','/embeddings-ui.js','/process-telemetry-ui.js','/process-methods.js','/graphrag-i18n.js','/interface-catalog.js','/interface-i18n.js','/graphrag-pilot-ui.js','/graphrag-explorer.js','/graphrag-query-progress.js','/graphrag-result-core.js','/graphrag-result-ui.js','/graphrag-entities.js','/source-review.js','/research-sessions.js','/knowledge-workspace.js','/knowledge-source-filters.js','/app-header.js','/place-map.js','/place-map-core.js','/place-map-navigation.js'):
+  if route.path in ('/vendor/sigma-graphology.js','/graph-webgl.js'):
+   self.reply((Path(__file__).resolve().parent/route.path.lstrip('/')).read_bytes(),kind='application/javascript');return
+  if route.path in ('/priority-search.js','/priority-balance-core.js','/priority-balance.js','/priority-catalog-editor.js','/sources-ui.js','/research-selection.js','/embeddings-ui.js','/process-telemetry-ui.js','/process-methods.js','/graphrag-i18n.js','/interface-catalog.js','/interface-i18n.js','/graphrag-pilot-ui.js','/graphrag-explorer.js','/graphrag-query-progress.js','/graphrag-result-core.js','/graphrag-result-ui.js','/graphrag-entities.js','/source-review.js','/research-sessions.js','/knowledge-workspace.js','/knowledge-graph-filters.js','/knowledge-source-filters.js','/app-header.js','/place-map.js','/place-map-core.js','/place-map-navigation.js'):
    self.reply((Path(__file__).resolve().parent/route.path.lstrip('/')).read_bytes(),kind='application/javascript');return
   if route.path=='/matrix':
    try:self.reply(reading_matrix.get(ROOT,q['id'][0]) if 'id' in q else reading_matrix.listing(ROOT))

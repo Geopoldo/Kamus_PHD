@@ -10,7 +10,7 @@ import shutil
 import time
 
 from embeddings import read, scan, write
-from graphrag_state import available_run
+from graphrag_state import available_run, visible_run
 
 
 def quote_checks(description, text):
@@ -34,7 +34,7 @@ def source_availability(root, run_id):
 
 def get(root):
     directory = root / 'knowledge_graph/pilot_30'
-    key = available_run(directory)
+    key = visible_run(directory)
     if not re.fullmatch(r'\d{8}T\d{6}', key):
         return dict(status='not_started', records=[])
     manifest = read(directory / 'runs' / key / 'manifest.json')
@@ -61,7 +61,7 @@ def status(root):
                 except (ValueError, UnicodeDecodeError): continue
         if sample: break
     fields = ['time','vram_used_mib','gpu_util_percent','temperature_c','power_watts','process_rss_mib','ram_available_gib']
-    active_key = available_run(directory)
+    active_key = visible_run(directory)
     active = read(directory / 'runs' / active_key / 'manifest.json')
     ready = (directory / 'runs' / active_key / 'review.json').is_file()
     prepared = read(directory / 'inputs.json')
@@ -80,7 +80,11 @@ def status(root):
         blocks['block_remaining_seconds'] = remaining
         blocks['final_remaining_seconds'] = remaining + sum(future_targets)*rate if remaining is not None and rate else None
         blocks['estimate_basis'] = 'Indicative cumulative rebuild estimate from completed runs; cache reuse and future GPU waits can change it.'
-    return dict(status=manifest.get('status'), manifest=manifest, plan=plan, server_time=time.time(),
+    from graphrag_control import state as control_state
+    control = control_state(root)
+    if control.get('status') in ('paused', 'stopping', 'publishing', 'error'):
+        eta = dict(status='paused')
+    return dict(status=manifest.get('status'), control=control, indexed_pages=read(directory/'runs'/available_run(directory)/'manifest.json').get('total',0), manifest=manifest, plan=plan, server_time=time.time(),
                 eta=eta, blocks=blocks,
                 resources={k:sample.get(k) for k in fields}, result_ready=ready,
                 available_run=active_key if ready else None, available_pages=active.get('total', 0) if ready else 0,
@@ -92,7 +96,7 @@ def status(root):
 
 def page(root, document, number, version, run_id=None):
     directory = root / 'knowledge_graph/pilot_30'
-    key = run_id or available_run(directory)
+    key = run_id or visible_run(directory)
     if not re.fullmatch(r'\d{8}T\d{6}',key): raise ValueError('No hay un piloto disponible')
     snapshot = read(directory / 'runs' / key / 'inputs.json')
     r = next((r for r in snapshot.get('records',[]) if r['document_id']==document and r['page']==number and r['version']==version),None)
@@ -153,26 +157,27 @@ def entity_inventory(extractions, unit_map, inputs):
     return nodes
 
 
-def publish(root):
+def publish(root, checkpoint_run=None):
     import pandas as pd
     directory = root / 'knowledge_graph/pilot_30'
-    key = read(directory / 'latest.json')['run_id']
+    key = checkpoint_run or read(directory / 'latest.json')['run_id']
     run_dir = directory / 'runs' / key
     m = read(run_dir / 'manifest.json')
-    if m['status'] != 'complete':
+    if m['status'] != ('checkpoint' if checkpoint_run else 'complete'):
         raise ValueError('The pilot has not completed successfully')
-    source = directory / 'inputs.json'
+    source = run_dir/'inputs.json' if checkpoint_run else directory/'inputs.json'
     if hashlib.sha256(source.read_bytes()).hexdigest() != m['input_sha256']:
         raise ValueError('Input snapshot changed after this run')
     snapshot = read(source); inputs = {r['id']: r for r in snapshot['records']}
     write(run_dir / 'inputs.json', snapshot)
     # Questions must keep using the exact index even if a later pilot replaces output/.
+    output = run_dir/'index' if checkpoint_run else directory/'output'
     frozen_index = run_dir / 'index'
     if not frozen_index.exists(): shutil.copytree(directory/'output', frozen_index)
     write(run_dir / 'index_manifest.json', dict(files={str(p.relative_to(frozen_index)):hashlib.sha256(p.read_bytes()).hexdigest() for p in frozen_index.rglob('*') if p.is_file()}))
     runtime = runtime_summary(run_dir)
     write(run_dir / 'runtime_summary.json', runtime)
-    units = pd.read_parquet(directory / 'output/text_units.parquet')
+    units = pd.read_parquet(output / 'text_units.parquet')
     unit_map = {r['id']: r for r in units.to_dict('records')}
     edges = []
     extractions = [json.loads(line) for line in (run_dir / 'extractions.jsonl').read_text().splitlines()]
@@ -211,9 +216,9 @@ def publish(root):
                 page={k:page[k] for k in ('document_id','document','folder','page','version','review_status','text_sha256')}))
     # Every original record remains accessible, including empty extractions.
     query = read(run_dir / 'query.json')
-    reports = pd.read_parquet(directory / 'output/community_reports.parquet')
+    reports = pd.DataFrame() if checkpoint_run else pd.read_parquet(output / 'community_reports.parquet')
     completion_reasons = {}
-    for path in (directory/'cache').rglob('*'):
+    for path in ([] if checkpoint_run else (directory/'cache').rglob('*')):
         if not path.is_file(): continue
         try:
             cached=json.loads(path.read_text())['result']['response']
@@ -251,6 +256,10 @@ def publish(root):
                      'Output token limits and extraction errors can omit entities or relations; this is not exhaustive retrieval.',
                      'Literal quote presence does not establish entity type, relationship, date or historical truth.',
                      'All links and generated community summaries require human review.'])
+    if checkpoint_run:
+        indexed = available_run(directory)
+        result.update(publication_kind='extraction_checkpoint', indexed_run=indexed, indexed_pages=read(directory/'runs'/indexed/'manifest.json').get('total',0))
+        result['limitations'].insert(0, 'CPU-only extraction snapshot. New pages are visible with sources; natural-language GraphRAG queries use the last completed index until processing resumes.')
     write(run_dir / 'review.json', result)
     stream = io.StringIO(); fields = ['source','source_type','target','target_type','description','quote_status','quotes','flags',
         'relation','assertion','attribution','event_time','document_time','folder','document','page','version','review_status','text_sha256','human_validation']
@@ -263,7 +272,9 @@ def publish(root):
         out.writerow(row)
     (run_dir / 'relationships.csv').write_text('\ufeff'+stream.getvalue())
     # Last operation: failed or incomplete publication keeps the old graph usable.
-    write(directory / 'active.json', dict(run_id=key, published=time.time(), pages=len(inputs)))
+    pointer = dict(run_id=key, published=time.time(), pages=len(inputs))
+    if not checkpoint_run: write(directory / 'active.json', pointer)
+    write(directory / 'visible.json', pointer)
     return result
 
 
